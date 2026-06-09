@@ -1,10 +1,43 @@
 import { AgentTmuxSdk } from "./sdk.js";
-import type { TaskResult } from "./types.js";
+import type { ClaudeAgentOptions } from "./types.js";
 
 export class ClaudeAgent {
-  constructor(private readonly sdk: AgentTmuxSdk = new AgentTmuxSdk()) {}
+  private readonly sdk: AgentTmuxSdk;
+  private readonly workingDirectory?: string;
+  private readonly timeoutMs?: number;
+  private cleaned = false;
 
-  run(prompt: string): Promise<TaskResult> {
-    return this.sdk.runOneShot(prompt);
+  constructor(options: ClaudeAgentOptions = {}) {
+    this.workingDirectory = options.workingDirectory;
+    this.timeoutMs = options.timeoutMs;
+    this.sdk = new AgentTmuxSdk({
+      poolSize: 1,
+      dangerouslySkipPermissions: options.dangerouslySkipPermissions ?? true,
+    });
+  }
+
+  async run(prompt: string): Promise<string> {
+    const result = await this.sdk.runOneShot(prompt, {
+      workingDirectory: this.workingDirectory,
+      timeoutMs: this.timeoutMs,
+    });
+    return result.output;
+  }
+
+  async *stream(prompt: string): AsyncIterable<string> {
+    yield* this.sdk.runStream(prompt, {
+      workingDirectory: this.workingDirectory,
+      timeoutMs: this.timeoutMs,
+    });
+  }
+
+  async cleanup(): Promise<void> {
+    if (this.cleaned) return;
+    this.cleaned = true;
+    await this.sdk.cleanup();
+  }
+
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.cleanup();
   }
 }

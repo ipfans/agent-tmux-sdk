@@ -5,6 +5,12 @@ export type TaskState = "queued" | "running" | "resuming" | "succeeded" | "faile
 export type TaskMode = "oneshot" | "result";
 export type ClaudeSessionId = string;
 
+export interface ClaudeAgentOptions {
+  readonly workingDirectory?: string;
+  readonly timeoutMs?: number;
+  readonly dangerouslySkipPermissions?: boolean;
+}
+
 export interface AgentTmuxSdkOptions {
   readonly poolSize?: number;
   readonly idleRestartMs?: number;
