@@ -90,6 +90,50 @@ export class RealTmuxAdapter implements TmuxAdapter {
     return { exitCode: 0, output };
   }
 
+  async *stream(sessionName: string, request: ClaudeExecutionRequest): AsyncIterable<string> {
+    if (request.workingDirectory) {
+      await execFileAsync("tmux", [
+        "send-keys", "-t", sessionName,
+        `/cd ${request.workingDirectory}`, "Enter",
+      ]);
+    }
+
+    await execFileAsync("tmux", ["send-keys", "-t", sessionName, request.prompt, "Enter"]);
+
+    let lastOutput = "";
+    let stableSince = 0;
+    let seenPrompt = false;
+    const deadline = Date.now() + 10 * 60 * 1000;
+
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, this.pollIntervalMs));
+      const output = await this.capturePane(sessionName);
+
+      if (!seenPrompt) {
+        if (output.includes(request.prompt)) {
+          seenPrompt = true;
+          lastOutput = output;
+        }
+        continue;
+      }
+
+      if (output !== lastOutput) {
+        const delta = this.extractDelta(lastOutput, output);
+        if (delta.length > 0) {
+          yield delta;
+        }
+        lastOutput = output;
+        stableSince = 0;
+      } else {
+        stableSince += this.pollIntervalMs;
+      }
+
+      if (this.isResponseComplete(output, request.prompt) || stableSince >= this.stableThresholdMs) {
+        return;
+      }
+    }
+  }
+
   async capturePane(sessionName: string): Promise<string> {
     const { stdout } = await execFileAsync("tmux", ["capture-pane", "-p", "-t", sessionName]);
     return stdout;
@@ -169,6 +213,19 @@ export class RealTmuxAdapter implements TmuxAdapter {
     }
 
     return lastOutput;
+  }
+
+  private extractDelta(previous: string, current: string): string {
+    if (current.startsWith(previous)) {
+      return current.slice(previous.length);
+    }
+    const prevLines = previous.split("\n");
+    const currLines = current.split("\n");
+    let commonPrefix = 0;
+    while (commonPrefix < prevLines.length && commonPrefix < currLines.length && prevLines[commonPrefix] === currLines[commonPrefix]) {
+      commonPrefix++;
+    }
+    return currLines.slice(commonPrefix).join("\n");
   }
 
   private isResponseComplete(output: string, prompt: string): boolean {

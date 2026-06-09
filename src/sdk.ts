@@ -9,6 +9,7 @@ import type {
   ProcessSnapshot,
   ProcessState,
   RunOneShotOptions,
+  RunStreamOptions,
   RunTaskOptions,
   SdkEventMap,
   TaskMode,
@@ -105,6 +106,62 @@ export class AgentTmuxSdk {
       waitForResult: options.waitForResult,
       metadata: options.metadata,
     });
+  }
+
+  async *runStream(prompt: string, options: RunStreamOptions = {}): AsyncIterable<string> {
+    if (this.closed) {
+      throw new AgentTaskError("SDK has been cleaned up");
+    }
+
+    const taskId = options.taskId ?? `${this.sessionPrefix}-task-${this.nextTaskNumber++}`;
+    let slot: TmuxSlot | undefined;
+
+    try {
+      slot = await this.acquireSlotBlocking();
+      slot.state = "busy";
+      slot.currentTaskId = taskId;
+      this.emitter.emit("taskStarted", { taskId, state: "running", mode: "oneshot", prompt, processId: slot.id, metadata: options.metadata });
+
+      if (!slot.claudeRunning) {
+        await this.tmux.startClaude(slot.sessionName, this.claudeStartOpts(slot.claudeSessionId));
+        slot.claudeRunning = true;
+      }
+
+      const request: ClaudeExecutionRequest = {
+        taskId,
+        prompt,
+        mode: "oneshot",
+        workingDirectory: options.workingDirectory,
+        waitForResult: true,
+        metadata: options.metadata,
+      };
+
+      for await (const chunk of this.tmux.stream(slot.sessionName, request)) {
+        this.emitter.emit("streamChunk", taskId, chunk);
+        yield chunk;
+      }
+
+      this.emitter.emit("taskCompleted", {
+        taskId,
+        state: "succeeded",
+        output: "",
+        processId: slot.id,
+        mode: "oneshot",
+        startedAt: slot.startedAt,
+        completedAt: Date.now(),
+        resumed: false,
+        metadata: options.metadata,
+      });
+    } catch (error) {
+      this.emitter.emit("taskFailed", taskId, error instanceof Error ? error : new AgentTaskError(String(error)));
+      throw error;
+    } finally {
+      if (slot !== undefined) {
+        slot.state = "idle";
+        slot.currentTaskId = undefined;
+        slot.lastUsedAt = Date.now();
+      }
+    }
   }
 
   runTask<TResult = unknown>(options: RunTaskOptions): Promise<TaskResult<TResult>> {
@@ -250,6 +307,17 @@ export class AgentTmuxSdk {
       });
       this.activeExecutions.add(execution);
     }
+  }
+
+  private async acquireSlotBlocking(): Promise<TmuxSlot> {
+    let slot: TmuxSlot | undefined;
+    while (slot === undefined) {
+      slot = await this.acquireSlot();
+      if (slot === undefined) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    }
+    return slot;
   }
 
   private async acquireSlot(): Promise<TmuxSlot | undefined> {

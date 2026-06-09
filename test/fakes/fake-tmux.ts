@@ -91,6 +91,13 @@ export class FakeTmux implements TmuxAdapter {
     return this.claude.execute(request);
   }
 
+  async *stream(
+    _sessionName: string,
+    request: ClaudeExecutionRequest,
+  ): AsyncIterable<string> {
+    yield* this.claude.stream(request);
+  }
+
   async capturePane(sessionName: string): Promise<string> {
     return this.sessions.has(sessionName) ? "pane content" : "";
   }

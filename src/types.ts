@@ -27,6 +27,13 @@ export interface RunTaskOptions {
   readonly metadata?: Record<string, unknown>;
 }
 
+export interface RunStreamOptions {
+  readonly taskId?: string;
+  readonly workingDirectory?: string;
+  readonly timeoutMs?: number;
+  readonly metadata?: Record<string, unknown>;
+}
+
 export interface RunOneShotOptions {
   readonly taskId?: string;
   readonly workingDirectory?: string;
@@ -115,6 +122,7 @@ export interface TmuxAdapter {
   exitClaude(sessionName: string): Promise<ClaudeSessionId | undefined>;
   resumeClaude(sessionName: string, sessionId: ClaudeSessionId): Promise<void>;
   execute(sessionName: string, request: ClaudeExecutionRequest): Promise<ClaudeExecutionResult>;
+  stream(sessionName: string, request: ClaudeExecutionRequest): AsyncIterable<string>;
 }
 
 export type SdkEventMap = {
