@@ -1,4 +1,5 @@
 import { AgentTaskError, ResultParseError, TaskTimeoutError, TmuxError } from "./errors.js";
+import { TypedEmitter } from "./events.js";
 import { RealTmuxAdapter } from "./tmux-adapter.js";
 import type {
   AgentTmuxSdkOptions,
@@ -9,6 +10,7 @@ import type {
   ProcessState,
   RunOneShotOptions,
   RunTaskOptions,
+  SdkEventMap,
   TaskMode,
   TaskResult,
   TaskSnapshot,
@@ -46,6 +48,7 @@ interface TaskRecord<TResult = unknown> {
 }
 
 export class AgentTmuxSdk {
+  private readonly emitter = new TypedEmitter<SdkEventMap>();
   private readonly tmux: TmuxAdapter;
   private readonly poolSize: number;
   private readonly idleRestartMs: number;
@@ -75,6 +78,21 @@ export class AgentTmuxSdk {
     this.sessionPrefix = options.sessionPrefix ?? "agent-tmux-sdk";
     this.waitForResult = options.waitForResult ?? true;
     this.dangerouslySkipPermissions = options.dangerouslySkipPermissions ?? true;
+  }
+
+  on<K extends keyof SdkEventMap & string>(event: K, listener: (...args: SdkEventMap[K]) => void): this {
+    this.emitter.on(event, listener);
+    return this;
+  }
+
+  off<K extends keyof SdkEventMap & string>(event: K, listener: (...args: SdkEventMap[K]) => void): this {
+    this.emitter.off(event, listener);
+    return this;
+  }
+
+  once<K extends keyof SdkEventMap & string>(event: K, listener: (...args: SdkEventMap[K]) => void): this {
+    this.emitter.once(event, listener);
+    return this;
   }
 
   runOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<TaskResult> {
@@ -114,6 +132,7 @@ export class AgentTmuxSdk {
       };
       this.tasks.set(taskId, task as TaskRecord);
       this.queue.push(task as TaskRecord);
+      this.emitter.emit("taskQueued", this.snapshotTask(task as TaskRecord));
       this.dispatch();
     });
     promise.catch(() => undefined);
@@ -139,16 +158,7 @@ export class AgentTmuxSdk {
     if (task === undefined) {
       return undefined;
     }
-    return {
-      taskId: task.taskId,
-      state: task.state,
-      mode: task.mode,
-      prompt: task.prompt,
-      processId: task.processId,
-      output: task.output,
-      error: task.error,
-      metadata: task.metadata,
-    };
+    return this.snapshotTask(task);
   }
 
   async restartIdleProcesses(now = Date.now()): Promise<void> {
@@ -182,6 +192,7 @@ export class AgentTmuxSdk {
         }
         await this.tmux.killSession(slot.sessionName);
         slot.state = "stopped";
+        this.emitter.emit("processStopped", slot.id);
       } catch (error) {
         slot.state = "failed";
         failures.push(error);
@@ -277,9 +288,11 @@ export class AgentTmuxSdk {
       slot.startedAt = handle.startedAt;
       await this.bootstrapClaude(slot);
       slot.state = "idle";
+      this.emitter.emit("processStarted", slot.id);
       return slot;
     } catch (error) {
       slot.state = "failed";
+      this.emitter.emit("processError", slot.id, error instanceof Error ? error : new TmuxError(String(error)));
       throw new TmuxError(`Failed to start tmux slot ${id}`, { cause: error });
     }
   }
@@ -321,6 +334,7 @@ export class AgentTmuxSdk {
     slot.currentTaskId = task.taskId;
     task.state = "running";
     task.processId = slot.id;
+    this.emitter.emit("taskStarted", this.snapshotTask(task));
     const startedAt = Date.now();
 
     try {
@@ -335,7 +349,7 @@ export class AgentTmuxSdk {
       const parsed = this.parseResultIfNeeded(task, result);
       task.state = "succeeded";
       const completedAt = Date.now();
-      task.resolve({
+      const taskResult: TaskResult = {
         taskId: task.taskId,
         state: "succeeded",
         output: result.output,
@@ -346,10 +360,13 @@ export class AgentTmuxSdk {
         completedAt,
         resumed: Boolean(result.resumed),
         metadata: task.metadata,
-      });
+      };
+      this.emitter.emit("taskCompleted", taskResult);
+      task.resolve(taskResult);
     } catch (error) {
       task.state = "failed";
       task.error = error instanceof Error ? error.message : String(error);
+      this.emitter.emit("taskFailed", task.taskId, error instanceof Error ? error : new AgentTaskError(String(error)));
       task.reject(error);
       if (error instanceof TaskTimeoutError && slot.claudeRunning) {
         try {
@@ -381,6 +398,7 @@ export class AgentTmuxSdk {
     while (result.tokenExhausted === true && attempts < this.resumeAttempts) {
       attempts += 1;
       task.state = "resuming";
+      this.emitter.emit("taskResuming", task.taskId, attempts);
 
       const exitSessionId = await this.tmux.exitClaude(slot.sessionName);
       slot.claudeRunning = false;
@@ -455,6 +473,19 @@ export class AgentTmuxSdk {
     } catch (error) {
       throw new ResultParseError("Claude output was not valid JSON for result mode", { cause: error });
     }
+  }
+
+  private snapshotTask(task: TaskRecord): TaskSnapshot {
+    return {
+      taskId: task.taskId,
+      state: task.state,
+      mode: task.mode,
+      prompt: task.prompt,
+      processId: task.processId,
+      output: task.output,
+      error: task.error,
+      metadata: task.metadata,
+    };
   }
 
   private cancelTask(task: TaskRecord, message: string): void {
