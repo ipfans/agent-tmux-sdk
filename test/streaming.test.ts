@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { AgentTmuxSdk } from "../src/index.js";
 import { FakeTmux } from "./fakes/fake-tmux.js";
 
+async function drain(iter: AsyncIterable<string>): Promise<void> {
+  for await (const chunk of iter) {
+    void chunk;
+  }
+}
+
 describe("streaming", () => {
   it("yields all chunks from the adapter in order", async () => {
     const tmux = new FakeTmux();
@@ -23,9 +29,7 @@ describe("streaming", () => {
     const listener = vi.fn();
     sdk.on("streamChunk", listener);
 
-    for await (const _chunk of sdk.runStream("test")) {
-      // consume
-    }
+    await drain(sdk.runStream("test"));
 
     expect(listener).toHaveBeenCalledTimes(2);
     expect(listener.mock.calls[0]?.[1]).toBe("a");
@@ -40,9 +44,7 @@ describe("streaming", () => {
     sdk.on("taskStarted", () => events.push("started"));
     sdk.on("taskCompleted", () => events.push("completed"));
 
-    for await (const _chunk of sdk.runStream("test")) {
-      // consume
-    }
+    await drain(sdk.runStream("test"));
 
     expect(events).toEqual(["started", "completed"]);
   });
@@ -52,9 +54,7 @@ describe("streaming", () => {
     tmux.claude.enqueue({ type: "stream", chunks: ["ok"] });
     const sdk = new AgentTmuxSdk({ tmux });
 
-    for await (const _chunk of sdk.runStream("test")) {
-      // consume
-    }
+    await drain(sdk.runStream("test"));
 
     expect(sdk.getProcesses()[0]?.state).toBe("idle");
     expect(sdk.getProcesses()[0]?.currentTaskId).toBeUndefined();
@@ -65,11 +65,8 @@ describe("streaming", () => {
     tmux.claude.enqueue({ type: "failure", message: "broken" });
     const sdk = new AgentTmuxSdk({ tmux });
 
-    const chunks: string[] = [];
     try {
-      for await (const chunk of sdk.runStream("fail")) {
-        chunks.push(chunk);
-      }
+      await drain(sdk.runStream("fail"));
     } catch {
       // expected
     }
@@ -85,9 +82,7 @@ describe("streaming", () => {
     sdk.on("taskFailed", listener);
 
     try {
-      for await (const _chunk of sdk.runStream("fail")) {
-        // consume
-      }
+      await drain(sdk.runStream("fail"));
     } catch {
       // expected
     }
@@ -113,9 +108,7 @@ describe("streaming", () => {
     await sdk.cleanup();
 
     await expect(async () => {
-      for await (const _chunk of sdk.runStream("nope")) {
-        // should not reach
-      }
+      await drain(sdk.runStream("nope"));
     }).rejects.toThrow("SDK has been cleaned up");
   });
 });
