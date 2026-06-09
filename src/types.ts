@@ -116,3 +116,15 @@ export interface TmuxAdapter {
   resumeClaude(sessionName: string, sessionId: ClaudeSessionId): Promise<void>;
   execute(sessionName: string, request: ClaudeExecutionRequest): Promise<ClaudeExecutionResult>;
 }
+
+export type SdkEventMap = {
+  taskQueued: [snapshot: TaskSnapshot];
+  taskStarted: [snapshot: TaskSnapshot];
+  taskCompleted: [result: TaskResult];
+  taskFailed: [taskId: string, error: Error];
+  taskResuming: [taskId: string, attempt: number];
+  processStarted: [processId: string];
+  processStopped: [processId: string];
+  processError: [processId: string, error: Error];
+  streamChunk: [taskId: string, chunk: string];
+};
