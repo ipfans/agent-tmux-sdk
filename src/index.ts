@@ -1,6 +1,7 @@
 export {
   DEFAULT_IDLE_RESTART_MS,
   type AgentTmuxSdkOptions,
+  type ClaudeAgentOptions,
   type ClaudeExecutionRequest,
   type ClaudeExecutionResult,
   type ClaudeSessionId,
@@ -9,7 +10,9 @@ export {
   type ProcessState,
   type RealTmuxAdapterOptions,
   type RunOneShotOptions,
+  type RunStreamOptions,
   type RunTaskOptions,
+  type SdkEventMap,
   type TaskMode,
   type TaskResult,
   type TaskSnapshot,
@@ -25,6 +28,8 @@ export {
   TaskTimeoutError,
   TmuxError,
 } from "./errors.js";
+
+export { TypedEmitter } from "./events.js";
 
 export { RealTmuxAdapter } from "./tmux-adapter.js";
 

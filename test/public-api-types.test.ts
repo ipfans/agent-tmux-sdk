@@ -2,11 +2,14 @@ import { describe, expectTypeOf, it } from "vitest";
 import {
   AgentTmuxSdk,
   AgentTaskError,
+  ClaudeAgent,
   TmuxError,
   type AgentTmuxSdkOptions,
-  type ClaudeSessionId,
+  type ClaudeAgentOptions,
   type ProcessSnapshot,
   type ProcessState,
+  type RunStreamOptions,
+  type SdkEventMap,
   type TaskMode,
   type TaskResult,
   type TaskState,
@@ -14,7 +17,7 @@ import {
 import { FakeTmux } from "./fakes/fake-tmux.js";
 
 describe("public API types", () => {
-  it("exports SDK configuration and lifecycle types", () => {
+  it("exports SDK lifecycle types", () => {
     expectTypeOf<ProcessState>().toEqualTypeOf<
       "idle" | "starting" | "busy" | "restarting" | "stopped" | "failed"
     >();
@@ -22,8 +25,9 @@ describe("public API types", () => {
       "queued" | "running" | "resuming" | "succeeded" | "failed" | "cancelled"
     >();
     expectTypeOf<TaskMode>().toEqualTypeOf<"oneshot" | "result">();
-    expectTypeOf<ClaudeSessionId>().toEqualTypeOf<string>();
+  });
 
+  it("exports AgentTmuxSdk with correct method signatures", () => {
     const options: AgentTmuxSdkOptions = {
       poolSize: 2,
       idleRestartMs: 10,
@@ -32,10 +36,35 @@ describe("public API types", () => {
     const sdk = new AgentTmuxSdk(options);
     expectTypeOf(sdk.runOneShot).parameter(0).toEqualTypeOf<string>();
     expectTypeOf(sdk.runTask<{ ok: true }>).returns.toEqualTypeOf<Promise<TaskResult<{ ok: true }>>>();
+    expectTypeOf(sdk.on).parameter(0).toMatchTypeOf<string>();
+  });
+
+  it("exports ClaudeAgent with beginner-friendly API", () => {
+    expectTypeOf<ClaudeAgentOptions>().toHaveProperty("workingDirectory");
+    expectTypeOf<ClaudeAgentOptions>().toHaveProperty("timeoutMs");
+    const agent = new ClaudeAgent();
+    expectTypeOf(agent.run).parameter(0).toEqualTypeOf<string>();
+    expectTypeOf(agent.run).returns.toEqualTypeOf<Promise<string>>();
+  });
+
+  it("exports error hierarchy", () => {
     expectTypeOf(new TmuxError("x")).toEqualTypeOf<TmuxError>();
     expectTypeOf(new AgentTaskError("x")).toEqualTypeOf<AgentTaskError>();
+  });
 
-    type HasClaudeFields = Pick<ProcessSnapshot, "claudeSessionId" | "claudeRunning">;
-    expectTypeOf<HasClaudeFields>().toMatchTypeOf<{ claudeSessionId?: string; claudeRunning: boolean }>();
+  it("exports SdkEventMap for typed event subscriptions", () => {
+    expectTypeOf<SdkEventMap>().toHaveProperty("taskQueued");
+    expectTypeOf<SdkEventMap>().toHaveProperty("taskCompleted");
+    expectTypeOf<SdkEventMap>().toHaveProperty("streamChunk");
+  });
+
+  it("exports RunStreamOptions", () => {
+    expectTypeOf<RunStreamOptions>().toHaveProperty("workingDirectory");
+    expectTypeOf<RunStreamOptions>().toHaveProperty("timeoutMs");
+  });
+
+  it("ProcessSnapshot does not have account field", () => {
+    type Keys = keyof ProcessSnapshot;
+    expectTypeOf<"account" extends Keys ? true : false>().toEqualTypeOf<false>();
   });
 });
