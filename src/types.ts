@@ -11,7 +11,6 @@ export interface AgentTmuxSdkOptions {
   readonly startupTimeoutMs?: number;
   readonly taskTimeoutMs?: number;
   readonly resumeAttempts?: number;
-  readonly account?: string;
   readonly sessionPrefix?: string;
   readonly waitForResult?: boolean;
   readonly dangerouslySkipPermissions?: boolean;
@@ -65,7 +64,6 @@ export interface ProcessSnapshot {
   readonly sessionName: string;
   readonly paneId?: string;
   readonly state: ProcessState;
-  readonly account?: string;
   readonly startedAt: number;
   readonly lastUsedAt: number;
   readonly currentTaskId?: string;
@@ -80,7 +78,6 @@ export interface TmuxProcessHandle {
 }
 
 export interface ClaudeStartOptions {
-  readonly account?: string;
   readonly startupTimeoutMs?: number;
   readonly sessionId?: ClaudeSessionId;
   readonly dangerouslySkipPermissions?: boolean;
@@ -91,7 +88,6 @@ export interface ClaudeExecutionRequest {
   readonly prompt: string;
   readonly mode: TaskMode;
   readonly workingDirectory?: string;
-  readonly account?: string;
   readonly waitForResult?: boolean;
   readonly metadata?: Record<string, unknown>;
 }
@@ -119,5 +115,4 @@ export interface TmuxAdapter {
   exitClaude(sessionName: string): Promise<ClaudeSessionId | undefined>;
   resumeClaude(sessionName: string, sessionId: ClaudeSessionId): Promise<void>;
   execute(sessionName: string, request: ClaudeExecutionRequest): Promise<ClaudeExecutionResult>;
-  switchAccount(sessionName: string, account: string): Promise<void>;
 }

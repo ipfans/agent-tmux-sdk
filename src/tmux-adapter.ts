@@ -58,9 +58,6 @@ export class RealTmuxAdapter implements TmuxAdapter {
     if (!started) {
       throw new TmuxError(`Claude failed to start within ${timeoutMs}ms in ${sessionName}`);
     }
-    if (options.account) {
-      await this.switchAccount(sessionName, options.account);
-    }
   }
 
   async exitClaude(sessionName: string): Promise<ClaudeSessionId | undefined> {
@@ -91,10 +88,6 @@ export class RealTmuxAdapter implements TmuxAdapter {
 
     const output = await this.waitForCompletion(sessionName, request.prompt);
     return { exitCode: 0, output };
-  }
-
-  async switchAccount(sessionName: string, account: string): Promise<void> {
-    await execFileAsync("tmux", ["send-keys", "-t", sessionName, `/account ${account}`, "Enter"]);
   }
 
   async capturePane(sessionName: string): Promise<string> {

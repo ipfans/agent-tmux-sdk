@@ -28,7 +28,6 @@ describe("public API types", () => {
       poolSize: 2,
       idleRestartMs: 10,
       tmux: new FakeTmux(),
-      account: "work",
     };
     const sdk = new AgentTmuxSdk(options);
     expectTypeOf(sdk.runOneShot).parameter(0).toEqualTypeOf<string>();

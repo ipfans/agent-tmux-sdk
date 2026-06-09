@@ -33,7 +33,7 @@ async function main() {
 
   // Inspect pool state / 查看进程池状态
   for (const process of sdk.getProcesses()) {
-    console.log(`Process ${process.id}: state=${process.state}, account=${process.account}`);
+    console.log(`Process ${process.id}: state=${process.state}`);
   }
 
   await sdk.cleanup();

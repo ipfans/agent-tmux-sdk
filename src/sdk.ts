@@ -22,7 +22,6 @@ interface TmuxSlot {
   sessionName: string;
   paneId?: string;
   state: ProcessState;
-  account?: string;
   startedAt: number;
   lastUsedAt: number;
   currentTaskId?: string;
@@ -60,7 +59,6 @@ export class AgentTmuxSdk {
   private readonly tasks = new Map<string, TaskRecord>();
   private readonly queue: TaskRecord[] = [];
   private readonly activeExecutions = new Set<Promise<void>>();
-  private desiredAccount?: string;
   private dispatchPromise: Promise<void> | undefined;
   private dispatchAgain = false;
   private nextSlotNumber = 1;
@@ -77,7 +75,6 @@ export class AgentTmuxSdk {
     this.sessionPrefix = options.sessionPrefix ?? "agent-tmux-sdk";
     this.waitForResult = options.waitForResult ?? true;
     this.dangerouslySkipPermissions = options.dangerouslySkipPermissions ?? true;
-    this.desiredAccount = options.account;
   }
 
   runOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<TaskResult> {
@@ -129,7 +126,6 @@ export class AgentTmuxSdk {
       sessionName: slot.sessionName,
       paneId: slot.paneId,
       state: slot.state,
-      account: slot.account,
       startedAt: slot.startedAt,
       lastUsedAt: slot.lastUsedAt,
       currentTaskId: slot.currentTaskId,
@@ -153,12 +149,6 @@ export class AgentTmuxSdk {
       error: task.error,
       metadata: task.metadata,
     };
-  }
-
-  async switchAccount(account: string): Promise<void> {
-    this.desiredAccount = account;
-    const idleSlots = this.slots.filter((slot) => slot.state === "idle");
-    await Promise.all(idleSlots.map((slot) => this.applyAccount(slot, account)));
   }
 
   async restartIdleProcesses(now = Date.now()): Promise<void> {
@@ -254,9 +244,6 @@ export class AgentTmuxSdk {
   private async acquireSlot(): Promise<TmuxSlot | undefined> {
     const idle = this.slots.find((slot) => slot.state === "idle");
     if (idle !== undefined) {
-      if (this.desiredAccount !== undefined && idle.account !== this.desiredAccount) {
-        await this.applyAccount(idle, this.desiredAccount);
-      }
       return idle;
     }
 
@@ -278,7 +265,6 @@ export class AgentTmuxSdk {
       id,
       sessionName: id,
       state: "starting",
-      account: this.desiredAccount,
       startedAt: Date.now(),
       lastUsedAt: Date.now(),
       claudeRunning: false,
@@ -324,25 +310,10 @@ export class AgentTmuxSdk {
 
   private claudeStartOpts(sessionId?: ClaudeSessionId): import("./types.js").ClaudeStartOptions {
     return {
-      account: this.desiredAccount,
       startupTimeoutMs: this.startupTimeoutMs,
       sessionId,
       dangerouslySkipPermissions: this.dangerouslySkipPermissions,
     };
-  }
-
-  private async applyAccount(slot: TmuxSlot, account: string): Promise<void> {
-    if (slot.account === account) {
-      return;
-    }
-
-    try {
-      await this.tmux.switchAccount(slot.sessionName, account);
-      slot.account = account;
-    } catch (error) {
-      slot.state = "failed";
-      throw new TmuxError(`Failed to switch account for ${slot.sessionName}`, { cause: error });
-    }
   }
 
   private async executeTask(slot: TmuxSlot, task: TaskRecord): Promise<void> {
@@ -442,7 +413,6 @@ export class AgentTmuxSdk {
       prompt: resuming ? "continue" : task.prompt,
       mode: task.mode,
       workingDirectory: task.workingDirectory,
-      account: this.desiredAccount,
       waitForResult: task.waitForResult ?? this.waitForResult,
       metadata: task.metadata,
     };

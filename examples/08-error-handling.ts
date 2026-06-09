@@ -39,8 +39,8 @@ async function main() {
       // 通用任务失败（执行错误、Token 耗尽等）
       console.error("Task failed:", error.message);
     } else if (error instanceof TmuxError) {
-      // Tmux session failure (start, restart, stop, account switch)
-      // tmux 会话失败（启动、重启、停止、账户切换）
+      // Tmux session failure (start, restart, stop)
+      // tmux 会话失败（启动、重启、停止）
       console.error("Tmux error:", error.message);
       if (error.cause) {
         console.error("  Caused by:", error.cause);

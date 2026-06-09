@@ -7,19 +7,17 @@ describe("fake tmux/fake Claude harness", () => {
     tmux.claude.enqueue({ type: "success", output: "done", result: { ok: true } });
 
     const handle = await tmux.createSession("s1");
-    await tmux.startClaude("s1", { account: "a" });
+    await tmux.startClaude("s1", {});
     const result = await tmux.execute(handle.sessionName, {
       taskId: "t1",
       prompt: "work",
       mode: "result",
     });
-    await tmux.switchAccount(handle.sessionName, "b");
     const sessionId = await tmux.exitClaude("s1");
     await tmux.killSession(handle.sessionName);
 
     expect(result).toMatchObject({ exitCode: 0, output: "done", result: { ok: true } });
     expect(sessionId).toMatch(/^session-/);
-    expect(tmux.accountSwitches).toEqual([{ sessionName: "s1", account: "b" }]);
     expect(tmux.sessions.has("s1")).toBe(false);
   });
 
@@ -81,13 +79,11 @@ describe("fake tmux/fake Claude harness", () => {
     tmux.failStartClaude = true;
     tmux.failExitClaude = true;
     tmux.failResumeClaude = true;
-    tmux.failAccountSwitch = true;
 
     await expect(tmux.createSession("s1")).rejects.toThrow("tmux create session failed");
     await expect(tmux.killSession("s1")).rejects.toThrow("tmux kill session failed");
     await expect(tmux.startClaude("s1", {})).rejects.toThrow("claude start failed");
     await expect(tmux.exitClaude("s1")).rejects.toThrow("claude exit failed");
     await expect(tmux.resumeClaude("s1", "id")).rejects.toThrow("claude resume failed");
-    await expect(tmux.switchAccount("s1", "b")).rejects.toThrow("account switch failed");
   });
 });

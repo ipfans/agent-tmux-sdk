@@ -7,52 +7,54 @@
 import {
   AgentTmuxSdk,
   type TmuxAdapter,
-  type ProcessStartOptions,
   type TmuxProcessHandle,
+  type ClaudeStartOptions,
   type ClaudeExecutionRequest,
   type ClaudeExecutionResult,
+  type ClaudeSessionId,
 } from "agent-tmux-sdk";
 
-// A logging adapter that wraps the real one and prints every operation.
-// 一个包装真实适配器并打印每个操作的日志适配器。
 class LoggingTmuxAdapter implements TmuxAdapter {
   constructor(private readonly inner: TmuxAdapter) {}
 
-  async startProcess(options: ProcessStartOptions): Promise<TmuxProcessHandle> {
-    console.log(`[tmux] startProcess: ${options.sessionName}`);
-    return this.inner.startProcess(options);
+  async createSession(sessionName: string, workingDirectory?: string): Promise<TmuxProcessHandle> {
+    console.log(`[tmux] createSession: ${sessionName}`);
+    return this.inner.createSession(sessionName, workingDirectory);
   }
 
-  async execute(sessionName: string, request: ClaudeExecutionRequest): Promise<ClaudeExecutionResult> {
-    console.log(`[tmux] execute: session=${sessionName}, task=${request.taskId}, resume=${request.resume}`);
-    const result = await this.inner.execute(sessionName, request);
-    console.log(`[tmux] execute done: exitCode=${result.exitCode}, tokenExhausted=${result.tokenExhausted}`);
-    return result;
-  }
-
-  async restartProcess(sessionName: string, options: ProcessStartOptions): Promise<TmuxProcessHandle> {
-    console.log(`[tmux] restartProcess: ${sessionName}`);
-    return this.inner.restartProcess(sessionName, options);
-  }
-
-  async switchAccount(sessionName: string, account: string): Promise<void> {
-    console.log(`[tmux] switchAccount: session=${sessionName}, account=${account}`);
-    return this.inner.switchAccount(sessionName, account);
+  async killSession(sessionName: string): Promise<void> {
+    console.log(`[tmux] killSession: ${sessionName}`);
+    return this.inner.killSession(sessionName);
   }
 
   async capturePane(sessionName: string): Promise<string> {
     return this.inner.capturePane(sessionName);
   }
 
-  async stopProcess(sessionName: string): Promise<void> {
-    console.log(`[tmux] stopProcess: ${sessionName}`);
-    return this.inner.stopProcess(sessionName);
+  async startClaude(sessionName: string, options: ClaudeStartOptions): Promise<void> {
+    console.log(`[tmux] startClaude: ${sessionName}`);
+    return this.inner.startClaude(sessionName, options);
+  }
+
+  async exitClaude(sessionName: string): Promise<ClaudeSessionId | undefined> {
+    console.log(`[tmux] exitClaude: ${sessionName}`);
+    return this.inner.exitClaude(sessionName);
+  }
+
+  async resumeClaude(sessionName: string, sessionId: ClaudeSessionId): Promise<void> {
+    console.log(`[tmux] resumeClaude: ${sessionName}, sessionId=${sessionId}`);
+    return this.inner.resumeClaude(sessionName, sessionId);
+  }
+
+  async execute(sessionName: string, request: ClaudeExecutionRequest): Promise<ClaudeExecutionResult> {
+    console.log(`[tmux] execute: session=${sessionName}, task=${request.taskId}`);
+    const result = await this.inner.execute(sessionName, request);
+    console.log(`[tmux] execute done: exitCode=${result.exitCode}`);
+    return result;
   }
 }
 
 async function main() {
-  // In production, wrap the real adapter; in tests, wrap a fake.
-  // 生产环境中包装真实适配器；测试中包装假适配器。
   const { RealTmuxAdapter } = await import("agent-tmux-sdk");
   const adapter = new LoggingTmuxAdapter(new RealTmuxAdapter());
 

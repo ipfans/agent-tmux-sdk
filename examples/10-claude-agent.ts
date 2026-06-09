@@ -15,7 +15,6 @@ async function main() {
   const customAgent = new ClaudeAgent(
     new AgentTmuxSdk({
       poolSize: 2,
-      account: "work",
       resumeAttempts: 3,
       sessionPrefix: "my-agent",
     }),
