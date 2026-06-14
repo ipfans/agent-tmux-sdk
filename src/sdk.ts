@@ -221,6 +221,10 @@ export class AgentTmuxSdk {
       }
       markDone();
       this.activeExecutions.delete(done);
+      // Wake the dispatcher: a queued runTask may have been waiting for the slot
+      // this stream just released. Without this, it would hang until the next
+      // submission triggered dispatch().
+      this.dispatch();
     }
   }
 
@@ -562,9 +566,12 @@ export class AgentTmuxSdk {
       task.error = error instanceof Error ? error.message : String(error);
       this.emitter.emit("taskFailed", task.taskId, error instanceof Error ? error : new AgentTaskError(String(error)));
       task.reject(error);
-      if (error instanceof TaskTimeoutError) {
-        // A timed-out turn is still mid-response: exit Claude so the stuck turn
-        // is abandoned and the slot starts fresh for the next task.
+      if (error instanceof TaskTimeoutError || error instanceof TmuxError) {
+        // The turn was abandoned mid-response — a per-task timeout
+        // (TaskTimeoutError), or the adapter giving up at its completion ceiling
+        // / a tmux failure (TmuxError). Claude may still be generating, so exit
+        // it and force a fresh start; leaving claudeRunning true would send the
+        // next task into a busy/unknown session.
         if (slot.claudeRunning) {
           try {
             await this.tmux.exitClaude(slot.sessionName);
@@ -574,7 +581,7 @@ export class AgentTmuxSdk {
           slot.claudeRunning = false;
         }
       }
-      // Other failures (bad JSON, token exhaustion, adapter errors) leave Claude
+      // Other failures (bad JSON, non-zero exit, token exhaustion) leave Claude
       // alive at its idle prompt — keep claudeRunning as-is so the next task
       // reuses the live session. Clearing it would make the next startClaude type
       // a launch command into a still-running Claude instead of a shell.

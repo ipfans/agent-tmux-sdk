@@ -122,4 +122,24 @@ describe("error paths", () => {
     expect(tmux.claudeStarts).toHaveLength(startsAfterFailure);
     expect(tmux.claudeExits).toHaveLength(1); // bootstrap exit only
   });
+
+  it("resets the busy session when the adapter throws a completion-timeout TmuxError", async () => {
+    const tmux = new FakeTmux();
+    const realExecute = tmux.execute.bind(tmux);
+    let thrown = false;
+    tmux.execute = async (sessionName, request) => {
+      if (!thrown) {
+        thrown = true;
+        throw new TmuxError("Claude response did not complete within 600000ms in s1");
+      }
+      return realExecute(sessionName, request);
+    };
+    const sdk = new AgentTmuxSdk({ tmux });
+
+    await expect(sdk.runOneShot("stuck")).rejects.toBeInstanceOf(TmuxError);
+    // The adapter gave up mid-turn: the slot's Claude is exited and marked not
+    // running so the next task starts a fresh session instead of a stuck one.
+    expect(tmux.claudeExits.length).toBeGreaterThan(1);
+    expect(sdk.getProcesses()[0]?.claudeRunning).toBe(false);
+  });
 });

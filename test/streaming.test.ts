@@ -168,4 +168,23 @@ describe("streaming", () => {
 
     expect(tmux.claudeInterrupts).toHaveLength(0);
   });
+
+  it("dispatches a task queued behind a stream-held slot", async () => {
+    const tmux = new FakeTmux();
+    tmux.claude.enqueue({ type: "stream", chunks: ["a", "b", "c"], chunkDelayMs: 10 });
+    tmux.claude.enqueue({ type: "success", output: "queued-result" });
+    const sdk = new AgentTmuxSdk({ tmux, poolSize: 1 });
+
+    let queued: Promise<{ output: string }> | undefined;
+    for await (const chunk of sdk.runStream("stream")) {
+      // Queue a task while the stream is mid-flight and holding the only slot.
+      queued ??= sdk.runOneShot("queued", { taskId: "q1" });
+      void chunk;
+    }
+
+    // The queued task must be picked up once the stream frees the slot — without
+    // the dispatch() wake, this await would hang.
+    const result = await queued!;
+    expect(result.output).toBe("queued-result");
+  });
 });
