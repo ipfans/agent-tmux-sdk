@@ -13,6 +13,9 @@ export default defineConfig({
   test: {
     globals: true,
     include: ["test/integration/**/*.test.ts"],
+    // Run suites one file at a time — real Claude instances are heavy and
+    // running every file in parallel would spawn too many concurrent sessions.
+    fileParallelism: false,
     testTimeout: 600_000,
     hookTimeout: 120_000,
   },

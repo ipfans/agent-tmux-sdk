@@ -16,10 +16,17 @@ const execFileAsync = promisify(execFile);
 
 const DEFAULT_POLL_INTERVAL_MS = 500;
 const DEFAULT_STABLE_THRESHOLD_MS = 5000;
-const DEFAULT_READY_PATTERN = /✻ (Baked|Took|Done|Cogitated)/;
+// Claude's spinner shows "✻ <Gerund> for <N>s" when a turn completes
+// (e.g. "✻ Crunched for 5s"); the gerund varies per turn, so match generically.
+const DEFAULT_READY_PATTERN = /✻\s+\S+\s+for\s+[\d.]+\s*s/;
 const SESSION_ID_PATTERN = /Resume this session with:\s*claude\s+--resume\s+(\S+)/;
 const SESSION_ID_FORMAT = /^[a-zA-Z0-9_-]+$/;
-const DEFAULT_SHELL_PROMPT_PATTERN = /[$%#>]\s*$/m;
+// Claude's running UI chrome. Used to detect readiness and exit instead of the
+// prompt char ❯, which collides with common shell prompts (zsh/starship/p10k).
+const CLAUDE_RUNNING_PATTERN = /⏵⏵|context\)|for shortcuts|esc to interrupt/;
+// Claude writes session state as it exits; relaunching too soon makes the new
+// process exit immediately. Settle after exit before any subsequent start.
+const CLAUDE_EXIT_SETTLE_MS = 3000;
 
 /* v8 ignore start */
 export class RealTmuxAdapter implements TmuxAdapter {
@@ -64,6 +71,9 @@ export class RealTmuxAdapter implements TmuxAdapter {
     await execFileAsync("tmux", ["send-keys", "-t", sessionName, "/exit", "Enter"]);
     const output = await this.waitForShellPrompt(sessionName);
     const match = SESSION_ID_PATTERN.exec(output);
+    // Let Claude finish releasing session state so a subsequent start doesn't
+    // race it and exit immediately.
+    await new Promise((resolve) => setTimeout(resolve, CLAUDE_EXIT_SETTLE_MS));
     return match?.[1];
   }
 
@@ -73,41 +83,30 @@ export class RealTmuxAdapter implements TmuxAdapter {
 
   async execute(sessionName: string, request: ClaudeExecutionRequest): Promise<ClaudeExecutionResult> {
     if (request.workingDirectory) {
-      await execFileAsync("tmux", [
-        "send-keys", "-t", sessionName,
-        `/cd ${request.workingDirectory}`, "Enter",
-      ]);
+      await this.sendPrompt(sessionName, `/cd ${request.workingDirectory}`);
     }
 
-    await execFileAsync("tmux", ["send-keys", "-t", sessionName, request.prompt, "Enter"]);
+    await this.sendPrompt(sessionName, request.prompt);
 
     if (request.waitForResult === false) {
       const output = await this.capturePane(sessionName);
       return { exitCode: 0, output };
     }
 
-    // Result mode needs the full answer even when it scrolls past the visible
-    // pane, and must not pick up a prior task's JSON from a reused slot. Detect
-    // completion and capture against joined scrollback, then return only the
-    // slice after the current prompt echo so extraction sees just this answer.
-    if (request.mode === "result") {
-      const full = await this.waitForCompletion(sessionName, request.prompt, (s) => this.captureResult(s));
-      return { exitCode: 0, output: this.sliceFromLastPrompt(full, request.prompt) };
-    }
-
-    const output = await this.waitForCompletion(sessionName, request.prompt);
-    return { exitCode: 0, output };
+    // Claude's TUI scrolls the prompt echo and response out of the visible pane,
+    // so completion detection and capture run against joined scrollback. Return
+    // only the slice after the current prompt echo so the output is clean and a
+    // reused slot's earlier turns can't leak into extraction.
+    const full = await this.waitForCompletion(sessionName);
+    return { exitCode: 0, output: this.sliceFromLastPrompt(full, request.prompt) };
   }
 
   async *stream(sessionName: string, request: ClaudeExecutionRequest): AsyncIterable<string> {
     if (request.workingDirectory) {
-      await execFileAsync("tmux", [
-        "send-keys", "-t", sessionName,
-        `/cd ${request.workingDirectory}`, "Enter",
-      ]);
+      await this.sendPrompt(sessionName, `/cd ${request.workingDirectory}`);
     }
 
-    await execFileAsync("tmux", ["send-keys", "-t", sessionName, request.prompt, "Enter"]);
+    await this.sendPrompt(sessionName, request.prompt);
 
     let lastOutput = "";
     let stableSince = 0;
@@ -148,9 +147,20 @@ export class RealTmuxAdapter implements TmuxAdapter {
     return stdout;
   }
 
-  private async captureResult(sessionName: string): Promise<string> {
+  private async sendPrompt(sessionName: string, text: string): Promise<void> {
+    // Send the text (-l = literal, so no token is mistaken for a key name) and
+    // the submit Enter as SEPARATE keystrokes. A long prompt sent with a
+    // trailing Enter in one send-keys call is not submitted — the Enter is
+    // absorbed into the large input — so a distinct Enter after a beat is needed.
+    await execFileAsync("tmux", ["send-keys", "-t", sessionName, "-l", text]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await execFileAsync("tmux", ["send-keys", "-t", sessionName, "Enter"]);
+  }
+
+  private async captureScrollback(sessionName: string): Promise<string> {
     // -J joins wrapped lines (so a wrapped prompt echo stays matchable); -S -
-    // includes scrollback (so a multi-screen answer is captured in full).
+    // includes scrollback (so the prompt echo and a multi-screen answer are
+    // captured even after Claude's TUI scrolls them out of the visible pane).
     const { stdout } = await execFileAsync("tmux", [
       "capture-pane", "-p", "-J", "-S", "-", "-t", sessionName,
     ]);
@@ -177,12 +187,13 @@ export class RealTmuxAdapter implements TmuxAdapter {
   }
 
   private async waitForStartup(sessionName: string, timeoutMs: number): Promise<boolean> {
-    const startupPattern = /❯\s*$/m;
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, this.pollIntervalMs));
       const output = await this.capturePane(sessionName);
-      if (startupPattern.test(output)) {
+      // Claude's prompt char (❯) often matches the shell prompt, so detect
+      // readiness by Claude's UI chrome instead.
+      if (CLAUDE_RUNNING_PATTERN.test(output)) {
         return true;
       }
     }
@@ -195,7 +206,8 @@ export class RealTmuxAdapter implements TmuxAdapter {
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, this.pollIntervalMs));
       lastOutput = await this.capturePane(sessionName);
-      if (DEFAULT_SHELL_PROMPT_PATTERN.test(lastOutput)) {
+      // Claude has returned to the shell once its UI chrome is gone.
+      if (!CLAUDE_RUNNING_PATTERN.test(lastOutput)) {
         return lastOutput;
       }
     }
@@ -204,28 +216,30 @@ export class RealTmuxAdapter implements TmuxAdapter {
 
   private async waitForCompletion(
     sessionName: string,
-    prompt: string,
-    capture: (session: string) => Promise<string> = (session) => this.capturePane(session),
+    capture: (session: string) => Promise<string> = (session) => this.captureScrollback(session),
   ): Promise<string> {
-    let lastOutput = "";
+    // The prompt echo reflows unpredictably across indented lines in Claude's
+    // input box, so completion is detected structurally rather than by matching
+    // the prompt text: wait for the pane to change (Claude started responding),
+    // then for it to stop changing (response finished). Claude's animated
+    // spinner keeps the pane changing while it works, so stability only settles
+    // once the turn is genuinely done.
+    const baseline = await capture(sessionName);
+    let lastOutput = baseline;
     let stableSince = 0;
-    let seenPrompt = false;
+    let changed = false;
     const deadline = Date.now() + 10 * 60 * 1000;
 
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, this.pollIntervalMs));
       const output = await capture(sessionName);
 
-      if (!seenPrompt) {
-        if (output.includes(prompt)) {
-          seenPrompt = true;
+      if (!changed) {
+        if (output !== baseline) {
+          changed = true;
+          lastOutput = output;
         }
-        lastOutput = output;
         continue;
-      }
-
-      if (this.isResponseComplete(output, prompt)) {
-        return output;
       }
 
       if (output === lastOutput) {
