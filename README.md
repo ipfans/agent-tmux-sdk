@@ -10,7 +10,8 @@ TypeScript SDK for orchestrating tmux sessions with Claude CLI to build multi-ag
 - **Process pool** — manages a configurable pool of tmux containers with Claude consumers
 - **Task queuing** — queues tasks when the pool is saturated and drains in assignment order
 - **Idle restart** — exits the Claude consumer and starts a fresh one in the same tmux container (default: 1 hour)
-- **Account switching** — switches Claude accounts on idle processes without interrupting running tasks
+- **Streaming** — consume a task's output incrementally with `runStream` (an `AsyncIterable<string>`)
+- **Typed lifecycle events** — subscribe to task/process events (`taskStarted`, `streamChunk`, `taskCompleted`, …) via `on`/`off`/`once`
 - **Token-exhaustion recovery** — captures Claude session ID on exhaustion, resumes with `claude --resume <id>`, sends "continue" prompt
 - **Two-phase cleanup** — gracefully exits Claude consumers first, then destroys tmux containers
 - **Dual execution modes** — one-shot (fire-and-forget), and result mode where the SDK coaxes JSON-only output, extracts it from terminal noise, retries on failure, and optionally validates/types it against a Zod schema
@@ -38,7 +39,6 @@ import { z } from "zod"; // optional peer dependency — only needed for result-
 const sdk = new AgentTmuxSdk({
   poolSize: 2,
   idleRestartMs: 60 * 60 * 1000,
-  account: "work",
 });
 
 // One-shot execution
@@ -71,7 +71,6 @@ All numeric values are configurable through `AgentTmuxSdkOptions`.
 | `startupTimeoutMs` | `30_000` | Max time (ms) to wait for Claude consumer startup |
 | `taskTimeoutMs` | `0` | Per-task timeout (ms). `0` disables |
 | `resumeAttempts` | `1` | Token-exhaustion resume attempts. `0` disables |
-| `account` | `undefined` | Initial Claude account/profile label |
 | `sessionPrefix` | `"agent-tmux-sdk"` | Prefix for tmux session names |
 | `waitForResult` | `true` | Wait for Claude output to stabilize before returning. Per-task overridable |
 | `tmux` | `RealTmuxAdapter` | Adapter for fake/real tmux implementations |
@@ -84,9 +83,10 @@ All numeric values are configurable through `AgentTmuxSdkOptions`.
 |--------|-------------|
 | `runOneShot(prompt, options?)` | Fire-and-forget execution, returns `TaskResult` |
 | `runTask<T>(options)` | Execute with full options, returns `TaskResult<T>` |
+| `runStream(prompt, options?)` | Stream output incrementally as an `AsyncIterable<string>` |
+| `on(event, listener)` / `off` / `once` | Subscribe to typed lifecycle events (`SdkEventMap`) |
 | `getProcesses()` | Snapshot of all pool processes (includes `claudeSessionId`, `claudeRunning`) |
 | `getTask(taskId)` | Snapshot of a specific task |
-| `switchAccount(account)` | Switch Claude account on idle processes |
 | `restartIdleProcesses(now?)` | Exit idle Claude consumer and start fresh one in same tmux container |
 | `cleanup()` | Two-phase: exit Claude consumers, then kill tmux containers |
 
@@ -104,24 +104,32 @@ Consumer operations:
 
 Task operations:
 - `execute(sessionName, request)` — send work and wait for completion
-- `switchAccount(sessionName, account)` — switch Claude account
+- `stream(sessionName, request)` — send work and yield output incrementally
+- `interrupt(sessionName)` — stop the current turn, returning Claude to an idle prompt
 
 ### `ClaudeAgent`
 
-Convenience wrapper for simple one-shot usage.
+Beginner-friendly wrapper for a single pooled Claude session. Configured with
+`ClaudeAgentOptions` (`workingDirectory`, `timeoutMs`, `dangerouslySkipPermissions`).
 
 ```typescript
-import { ClaudeAgent, AgentTmuxSdk } from "agent-tmux-sdk";
+import { ClaudeAgent } from "agent-tmux-sdk";
 
-const agent = new ClaudeAgent(new AgentTmuxSdk());
-const result = await agent.run("Hello");
+const agent = new ClaudeAgent({ workingDirectory: "/path/to/project", timeoutMs: 60_000 });
+const result = await agent.run("Hello"); // resolves to the output string
+
+for await (const chunk of agent.stream("Tell me a story")) {
+  process.stdout.write(chunk);
+}
+
+await agent.cleanup(); // also runs via `await using agent = new ClaudeAgent()`
 ```
 
 ### Error hierarchy
 
 ```
 AgentTmuxSdkError (base)
-├── TmuxError          — tmux container/Claude consumer start, restart, account switch, cleanup
+├── TmuxError          — tmux container/Claude consumer start, restart, completion timeout, cleanup
 └── AgentTaskError     — task-level failures
     ├── TaskTimeoutError   — per-task timeout exceeded
     └── ResultParseError   — result-mode output was not valid JSON

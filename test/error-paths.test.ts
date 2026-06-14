@@ -105,4 +105,21 @@ describe("error paths", () => {
     const result = await sdk.runOneShot("recover");
     expect(result.output).toContain("ok:");
   });
+
+  it("reuses the live Claude session after a non-timeout task failure", async () => {
+    const tmux = new FakeTmux();
+    tmux.claude.enqueue({ type: "failure", message: "boom" });
+    const sdk = new AgentTmuxSdk({ tmux });
+
+    await expect(sdk.runOneShot("fail")).rejects.toBeInstanceOf(AgentTaskError);
+    const startsAfterFailure = tmux.claudeStarts.length;
+
+    const recovered = await sdk.runOneShot("ok");
+
+    expect(recovered.state).toBe("succeeded");
+    // A non-timeout failure leaves Claude alive at its prompt: no restart, and no
+    // exit/interrupt that would have signalled the SDK thought the slot was dirty.
+    expect(tmux.claudeStarts).toHaveLength(startsAfterFailure);
+    expect(tmux.claudeExits).toHaveLength(1); // bootstrap exit only
+  });
 });

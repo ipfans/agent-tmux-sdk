@@ -138,6 +138,11 @@ export interface RealTmuxAdapterOptions {
   readonly pollIntervalMs?: number;
   readonly stableThresholdMs?: number;
   readonly readyPattern?: RegExp;
+  /**
+   * Hard ceiling (ms) for a single turn to complete before the adapter gives up
+   * and throws. Applies to both `execute` and `stream`. Defaults to 10 minutes.
+   */
+  readonly completionTimeoutMs?: number;
 }
 
 export interface TmuxAdapter {
@@ -149,6 +154,11 @@ export interface TmuxAdapter {
   resumeClaude(sessionName: string, sessionId: ClaudeSessionId): Promise<void>;
   execute(sessionName: string, request: ClaudeExecutionRequest): Promise<ClaudeExecutionResult>;
   stream(sessionName: string, request: ClaudeExecutionRequest): AsyncIterable<string>;
+  /**
+   * Stop the current Claude turn (without exiting the process) so a slot whose
+   * stream was abandoned mid-response returns to a clean, reusable prompt.
+   */
+  interrupt(sessionName: string): Promise<void>;
 }
 
 export type SdkEventMap = {

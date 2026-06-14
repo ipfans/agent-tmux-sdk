@@ -1,5 +1,11 @@
 import { AgentTaskError, ResultParseError, TaskTimeoutError, TmuxError } from "./errors.js";
-import { buildRepairInstruction, buildResultInstruction, extractJson, formatSchemaError } from "./json-result.js";
+import {
+  buildRepairInstruction,
+  buildResultInstruction,
+  collapseWhitespace,
+  extractJson,
+  formatSchemaError,
+} from "./json-result.js";
 import { TypedEmitter } from "./events.js";
 import { RealTmuxAdapter } from "./tmux-adapter.js";
 import type {
@@ -123,13 +129,32 @@ export class AgentTmuxSdk {
     }
 
     const taskId = options.taskId ?? `${this.sessionPrefix}-task-${this.nextTaskNumber++}`;
+    const timeoutMs = options.timeoutMs ?? this.taskTimeoutMs;
+    const startedAt = Date.now();
+
+    // Register the stream as in-flight work so cleanup() awaits it (and spares
+    // its slot) instead of tearing the session down mid-iteration.
+    let markDone!: () => void;
+    const done = new Promise<void>((resolve) => {
+      markDone = resolve;
+    });
+    this.activeExecutions.add(done);
+
     let slot: TmuxSlot | undefined;
+    let completed = false;
+    let output = "";
 
     try {
       slot = await this.acquireSlotBlocking();
-      slot.state = "busy";
       slot.currentTaskId = taskId;
-      this.emitter.emit("taskStarted", { taskId, state: "running", mode: "oneshot", prompt, processId: slot.id, metadata: options.metadata });
+      this.emitter.emit("taskStarted", {
+        taskId,
+        state: "running",
+        mode: "oneshot",
+        prompt,
+        processId: slot.id,
+        metadata: options.metadata,
+      });
 
       if (!slot.claudeRunning) {
         await this.tmux.startClaude(slot.sessionName, this.claudeStartOpts(slot.claudeSessionId));
@@ -145,31 +170,110 @@ export class AgentTmuxSdk {
         metadata: options.metadata,
       };
 
-      for await (const chunk of this.tmux.stream(slot.sessionName, request)) {
+      const source = this.tmux.stream(slot.sessionName, request);
+      for await (const chunk of this.withStreamTimeout(source, timeoutMs, taskId)) {
+        if (this.closed) {
+          break;
+        }
+        output += chunk;
         this.emitter.emit("streamChunk", taskId, chunk);
         yield chunk;
       }
+      completed = !this.closed;
 
-      this.emitter.emit("taskCompleted", {
-        taskId,
-        state: "succeeded",
-        output: "",
-        processId: slot.id,
-        mode: "oneshot",
-        startedAt: slot.startedAt,
-        completedAt: Date.now(),
-        resumed: false,
-        metadata: options.metadata,
-      });
+      if (completed) {
+        this.emitter.emit("taskCompleted", {
+          taskId,
+          state: "succeeded",
+          output,
+          processId: slot.id,
+          mode: "oneshot",
+          startedAt,
+          completedAt: Date.now(),
+          resumed: false,
+          metadata: options.metadata,
+        });
+      }
     } catch (error) {
       this.emitter.emit("taskFailed", taskId, error instanceof Error ? error : new AgentTaskError(String(error)));
       throw error;
     } finally {
       if (slot !== undefined) {
-        slot.state = "idle";
-        slot.currentTaskId = undefined;
-        slot.lastUsedAt = Date.now();
+        // The turn did not finish on its own (consumer broke early, the stream
+        // errored or timed out, or the SDK is shutting down): the session may be
+        // mid-response, so interrupt it back to a clean prompt rather than
+        // returning the slot to the pool where the next task would corrupt it.
+        if (!completed && slot.claudeRunning && slot.state !== "stopped" && slot.state !== "failed") {
+          try {
+            await this.tmux.interrupt(slot.sessionName);
+          } catch {
+            // Interrupt failed — force a fresh Claude on next use instead of
+            // typing into an unknown session state.
+            slot.claudeRunning = false;
+          }
+        }
+        // Don't clobber a "stopped"/"failed" state a concurrent cleanup may have set.
+        if (slot.state !== "stopped" && slot.state !== "failed") {
+          slot.state = "idle";
+          slot.currentTaskId = undefined;
+          slot.lastUsedAt = Date.now();
+        }
       }
+      markDone();
+      this.activeExecutions.delete(done);
+    }
+  }
+
+  /**
+   * Forward an async iterable, rejecting with TaskTimeoutError if no chunk
+   * arrives within `timeoutMs` (also catches a fully stalled stream). A
+   * non-positive timeout disables the wrapper. Always closes the source iterator
+   * when iteration stops early so the underlying poll loop is not left running.
+   */
+  private async *withStreamTimeout(
+    source: AsyncIterable<string>,
+    timeoutMs: number,
+    taskId: string,
+  ): AsyncIterable<string> {
+    if (timeoutMs <= 0) {
+      yield* source;
+      return;
+    }
+
+    const iterator = source[Symbol.asyncIterator]();
+    const deadline = Date.now() + timeoutMs;
+    try {
+      for (;;) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          throw new TaskTimeoutError(`Task ${taskId} timed out after ${timeoutMs}ms`);
+        }
+        let timer: NodeJS.Timeout | undefined;
+        const next = iterator.next();
+        next.catch(() => undefined); // avoid an unhandled rejection if the timeout wins
+        let result: IteratorResult<string>;
+        try {
+          result = await Promise.race([
+            next,
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(
+                () => reject(new TaskTimeoutError(`Task ${taskId} timed out after ${timeoutMs}ms`)),
+                remaining,
+              );
+            }),
+          ]);
+        } finally {
+          if (timer !== undefined) {
+            clearTimeout(timer);
+          }
+        }
+        if (result.done) {
+          return;
+        }
+        yield result.value;
+      }
+    } finally {
+      await iterator.return?.().catch(() => undefined);
     }
   }
 
@@ -303,6 +407,11 @@ export class AgentTmuxSdk {
       } catch (error) {
         task.state = "failed";
         task.error = error instanceof Error ? error.message : String(error);
+        this.emitter.emit(
+          "taskFailed",
+          task.taskId,
+          error instanceof Error ? error : new AgentTaskError(String(error)),
+        );
         task.reject(error);
         continue;
       }
@@ -320,19 +429,25 @@ export class AgentTmuxSdk {
   }
 
   private async acquireSlotBlocking(): Promise<TmuxSlot> {
-    let slot: TmuxSlot | undefined;
-    while (slot === undefined) {
-      slot = await this.acquireSlot();
-      if (slot === undefined) {
-        await new Promise((r) => setTimeout(r, 50));
+    for (;;) {
+      if (this.closed) {
+        throw new AgentTaskError("SDK has been cleaned up");
       }
+      const slot = await this.acquireSlot();
+      if (slot !== undefined) {
+        return slot;
+      }
+      await new Promise((r) => setTimeout(r, 50));
     }
-    return slot;
   }
 
   private async acquireSlot(): Promise<TmuxSlot | undefined> {
+    // Reserve the slot synchronously — flip it to "busy" before any await — so
+    // two concurrent acquirers (e.g. the dispatch loop and runStream) can never
+    // be handed the same idle slot.
     const idle = this.slots.find((slot) => slot.state === "idle");
     if (idle !== undefined) {
+      idle.state = "busy";
       return idle;
     }
 
@@ -345,7 +460,9 @@ export class AgentTmuxSdk {
       return undefined;
     }
 
-    return this.startSlot();
+    const slot = await this.startSlot();
+    slot.state = "busy";
+    return slot;
   }
 
   private async startSlot(): Promise<TmuxSlot> {
@@ -445,16 +562,22 @@ export class AgentTmuxSdk {
       task.error = error instanceof Error ? error.message : String(error);
       this.emitter.emit("taskFailed", task.taskId, error instanceof Error ? error : new AgentTaskError(String(error)));
       task.reject(error);
-      if (error instanceof TaskTimeoutError && slot.claudeRunning) {
-        try {
-          await this.tmux.exitClaude(slot.sessionName);
-        } catch {
-          // best-effort cleanup
+      if (error instanceof TaskTimeoutError) {
+        // A timed-out turn is still mid-response: exit Claude so the stuck turn
+        // is abandoned and the slot starts fresh for the next task.
+        if (slot.claudeRunning) {
+          try {
+            await this.tmux.exitClaude(slot.sessionName);
+          } catch {
+            // best-effort cleanup
+          }
+          slot.claudeRunning = false;
         }
-        slot.claudeRunning = false;
-      } else {
-        slot.claudeRunning = false;
       }
+      // Other failures (bad JSON, token exhaustion, adapter errors) leave Claude
+      // alive at its idle prompt — keep claudeRunning as-is so the next task
+      // reuses the live session. Clearing it would make the next startClaude type
+      // a launch command into a still-running Claude instead of a shell.
     } finally {
       slot.state = "idle";
       slot.currentTaskId = undefined;
@@ -477,8 +600,10 @@ export class AgentTmuxSdk {
     slot: TmuxSlot,
     task: TaskRecord,
   ): Promise<{ output: string; result: unknown; resumed: boolean }> {
-    // Single-line augmented prompt: tmux send-keys submits on every newline.
-    let prompt = `${task.prompt} ${buildResultInstruction()}`;
+    // Single-line augmented prompt: tmux send-keys submits on every newline, so
+    // a multi-line user prompt would otherwise send the appended JSON instruction
+    // as a separate turn (and the answer would come back as un-instructed prose).
+    let prompt = collapseWhitespace(`${task.prompt} ${buildResultInstruction()}`);
     let attempt = 0;
     let executions = 0;
     let resumed = false;

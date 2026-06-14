@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AgentTmuxSdk } from "../src/index.js";
+import { AgentTmuxSdk, TaskTimeoutError } from "../src/index.js";
 import { FakeTmux } from "./fakes/fake-tmux.js";
 
 async function drain(iter: AsyncIterable<string>): Promise<void> {
@@ -110,5 +110,62 @@ describe("streaming", () => {
     await expect(async () => {
       await drain(sdk.runStream("nope"));
     }).rejects.toThrow("SDK has been cleaned up");
+  });
+
+  it("reports accumulated output in taskCompleted", async () => {
+    const tmux = new FakeTmux();
+    tmux.claude.enqueue({ type: "stream", chunks: ["a", "b", "c"] });
+    const sdk = new AgentTmuxSdk({ tmux });
+    let completedOutput: string | undefined;
+    sdk.on("taskCompleted", (result) => {
+      completedOutput = result.output;
+    });
+
+    await drain(sdk.runStream("test"));
+
+    expect(completedOutput).toBe("abc");
+  });
+
+  it("times out a slow stream with a typed error", async () => {
+    const tmux = new FakeTmux();
+    tmux.claude.enqueue({ type: "stream", chunks: ["slow"], chunkDelayMs: 200 });
+    const sdk = new AgentTmuxSdk({ tmux });
+
+    await expect(drain(sdk.runStream("x", { timeoutMs: 10 }))).rejects.toBeInstanceOf(TaskTimeoutError);
+    expect(sdk.getProcesses()[0]?.state).toBe("idle");
+  });
+
+  it("interrupts the slot when a stream errors", async () => {
+    const tmux = new FakeTmux();
+    tmux.claude.enqueue({ type: "failure", message: "boom" });
+    const sdk = new AgentTmuxSdk({ tmux });
+
+    await expect(drain(sdk.runStream("fail"))).rejects.toThrow();
+
+    const sessionName = sdk.getProcesses()[0]?.sessionName;
+    expect(tmux.claudeInterrupts).toEqual([sessionName]);
+  });
+
+  it("interrupts the slot when the consumer breaks early", async () => {
+    const tmux = new FakeTmux();
+    tmux.claude.enqueue({ type: "stream", chunks: ["a", "b", "c", "d"] });
+    const sdk = new AgentTmuxSdk({ tmux });
+
+    for await (const chunk of sdk.runStream("test")) {
+      if (chunk === "b") break;
+    }
+
+    expect(tmux.claudeInterrupts).toHaveLength(1);
+    expect(sdk.getProcesses()[0]?.state).toBe("idle");
+  });
+
+  it("does not interrupt on clean completion", async () => {
+    const tmux = new FakeTmux();
+    tmux.claude.enqueue({ type: "stream", chunks: ["done"] });
+    const sdk = new AgentTmuxSdk({ tmux });
+
+    await drain(sdk.runStream("test"));
+
+    expect(tmux.claudeInterrupts).toHaveLength(0);
   });
 });

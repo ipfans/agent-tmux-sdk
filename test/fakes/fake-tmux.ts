@@ -20,6 +20,7 @@ export class FakeTmux implements TmuxAdapter {
   readonly claudeStarts: Array<{ sessionName: string; options: ClaudeStartOptions }> = [];
   readonly claudeExits: string[] = [];
   readonly claudeResumes: Array<{ sessionName: string; sessionId: string }> = [];
+  readonly claudeInterrupts: string[] = [];
   readonly executions: ClaudeExecutionRequest[] = [];
   readonly sessions = new Set<string>();
   readonly claudeProcesses = new Map<string, FakeClaudeProcess>();
@@ -96,6 +97,10 @@ export class FakeTmux implements TmuxAdapter {
     request: ClaudeExecutionRequest,
   ): AsyncIterable<string> {
     yield* this.claude.stream(request);
+  }
+
+  async interrupt(sessionName: string): Promise<void> {
+    this.claudeInterrupts.push(sessionName);
   }
 
   async capturePane(sessionName: string): Promise<string> {

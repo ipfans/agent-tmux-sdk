@@ -52,6 +52,16 @@ class LoggingTmuxAdapter implements TmuxAdapter {
     console.log(`[tmux] execute done: exitCode=${result.exitCode}`);
     return result;
   }
+
+  async *stream(sessionName: string, request: ClaudeExecutionRequest): AsyncIterable<string> {
+    console.log(`[tmux] stream: session=${sessionName}, task=${request.taskId}`);
+    yield* this.inner.stream(sessionName, request);
+  }
+
+  async interrupt(sessionName: string): Promise<void> {
+    console.log(`[tmux] interrupt: ${sessionName}`);
+    return this.inner.interrupt(sessionName);
+  }
 }
 
 async function main() {

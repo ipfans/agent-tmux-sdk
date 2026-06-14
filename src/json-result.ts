@@ -101,7 +101,14 @@ export function extractJson(raw: string): string | undefined {
   return extractFromText(stripAnsi(raw));
 }
 
-function extractFromText(text: string): string | undefined {
+// Bounds the recursive descent into bracket-balanced prose so adversarial output
+// (e.g. thousands of nested unparseable brackets) cannot overflow the stack.
+const MAX_EXTRACT_DEPTH = 64;
+
+function extractFromText(text: string, depth = 0): string | undefined {
+  if (depth > MAX_EXTRACT_DEPTH) {
+    return undefined;
+  }
   const candidates = balancedJsonCandidates(text);
   for (let i = candidates.length - 1; i >= 0; i--) {
     const candidate = candidates[i];
@@ -114,7 +121,7 @@ function extractFromText(text: string): string | undefined {
     // A balanced region that isn't valid JSON on its own may still wrap one
     // (e.g. JSON inside bracket-balanced prose: "[the object {\"a\":1}]"). Look
     // inside it before giving up, preferring an outer parseable value.
-    const inner = extractFromText(candidate.slice(1, -1));
+    const inner = extractFromText(candidate.slice(1, -1), depth + 1);
     if (inner !== undefined) {
       return inner;
     }
@@ -126,7 +133,12 @@ function stripAnsi(input: string): string {
   return input.replace(ANSI_PATTERN, "");
 }
 
-function collapseWhitespace(input: string): string {
+/**
+ * Collapse all runs of whitespace (including newlines) to single spaces. Used to
+ * keep result-mode prompts on one line — `tmux send-keys` submits on every
+ * newline, so a multi-line prompt would be sent as separate, fragmentary turns.
+ */
+export function collapseWhitespace(input: string): string {
   return input.replace(/\s+/g, " ").trim();
 }
 

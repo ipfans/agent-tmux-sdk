@@ -37,11 +37,13 @@ export class RealTmuxAdapter implements TmuxAdapter {
   private readonly pollIntervalMs: number;
   private readonly stableThresholdMs: number;
   private readonly readyPattern: RegExp;
+  private readonly completionTimeoutMs: number;
 
   constructor(options: RealTmuxAdapterOptions = {}) {
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.stableThresholdMs = options.stableThresholdMs ?? DEFAULT_STABLE_THRESHOLD_MS;
     this.readyPattern = options.readyPattern ?? DEFAULT_READY_PATTERN;
+    this.completionTimeoutMs = options.completionTimeoutMs ?? DEFAULT_COMPLETION_TIMEOUT_MS;
   }
 
   async createSession(sessionName: string, workingDirectory?: string): Promise<TmuxProcessHandle> {
@@ -77,15 +79,27 @@ export class RealTmuxAdapter implements TmuxAdapter {
   async exitClaude(sessionName: string): Promise<ClaudeSessionId | undefined> {
     await execFileAsync("tmux", ["send-keys", "-t", sessionName, "/exit", "Enter"]);
     const output = await this.waitForShellPrompt(sessionName);
-    const match = SESSION_ID_PATTERN.exec(output);
     // Let Claude finish releasing session state so a subsequent start doesn't
     // race it and exit immediately.
     await new Promise((resolve) => setTimeout(resolve, CLAUDE_EXIT_SETTLE_MS));
+    // Re-capture after the settle: the "Resume this session with: claude --resume
+    // <id>" line can render just as the UI chrome clears — i.e. right after
+    // waitForShellPrompt returns — so the pre-settle capture may not contain it
+    // yet. Prefer the settled capture and fall back to the earlier one.
+    const settled = await this.capturePane(sessionName);
+    const match = SESSION_ID_PATTERN.exec(settled) ?? SESSION_ID_PATTERN.exec(output);
     return match?.[1];
   }
 
   async resumeClaude(sessionName: string, sessionId: ClaudeSessionId): Promise<void> {
     await this.startClaude(sessionName, { sessionId });
+  }
+
+  async interrupt(sessionName: string): Promise<void> {
+    // Escape stops Claude's current turn and returns it to an idle prompt (a
+    // no-op when Claude is already idle). Used to recover a slot whose stream was
+    // abandoned mid-response so the next task isn't typed into a busy turn.
+    await execFileAsync("tmux", ["send-keys", "-t", sessionName, "Escape"]);
   }
 
   async execute(sessionName: string, request: ClaudeExecutionRequest): Promise<ClaudeExecutionResult> {
@@ -114,44 +128,56 @@ export class RealTmuxAdapter implements TmuxAdapter {
   }
 
   async *stream(sessionName: string, request: ClaudeExecutionRequest): AsyncIterable<string> {
+    // Scope the capture to this turn (a pooled slot otherwise carries earlier
+    // output), matching execute().
+    await execFileAsync("tmux", ["clear-history", "-t", sessionName]);
+
     if (request.workingDirectory) {
       await this.sendPrompt(sessionName, `/cd ${request.workingDirectory}`);
     }
 
     await this.sendPrompt(sessionName, request.prompt);
 
-    let lastOutput = "";
+    // Detect start/finish structurally — wait for the pane to change, then to
+    // stop changing — rather than matching the prompt text, which reflows
+    // unpredictably in the input box. Anything already captured (the prompt echo
+    // and Claude's chrome) is the baseline; only transcript text beyond it is
+    // streamed.
+    let emitted = this.responseRegion(await this.captureScrollback(sessionName));
+    let lastFull = "";
     let stableSince = 0;
-    let seenPrompt = false;
-    const deadline = Date.now() + DEFAULT_COMPLETION_TIMEOUT_MS;
+    let changed = false;
+    const deadline = Date.now() + this.completionTimeoutMs;
 
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, this.pollIntervalMs));
-      const output = await this.capturePane(sessionName);
+      const full = await this.captureScrollback(sessionName);
+      const region = this.responseRegion(full);
 
-      if (!seenPrompt) {
-        if (output.includes(request.prompt)) {
-          seenPrompt = true;
-          lastOutput = output;
-        }
-        continue;
+      const delta = this.appendDelta(emitted, region);
+      if (delta.length > 0) {
+        emitted += delta;
+        yield delta;
       }
 
-      if (output !== lastOutput) {
-        const delta = this.extractDelta(lastOutput, output);
-        if (delta.length > 0) {
-          yield delta;
-        }
-        lastOutput = output;
+      if (full !== lastFull) {
+        changed = true;
         stableSince = 0;
       } else {
         stableSince += this.pollIntervalMs;
       }
+      lastFull = full;
 
-      if (this.isResponseComplete(output, request.prompt) || stableSince >= this.stableThresholdMs) {
+      if (changed && stableSince >= this.stableThresholdMs) {
         return;
       }
     }
+
+    // Deadline hit — throw a typed error rather than returning silently as if the
+    // stream finished, which would mask a stuck or truncated turn.
+    throw new TmuxError(
+      `Claude stream did not complete within ${this.completionTimeoutMs}ms in ${sessionName}`,
+    );
   }
 
   async capturePane(sessionName: string): Promise<string> {
@@ -164,7 +190,9 @@ export class RealTmuxAdapter implements TmuxAdapter {
     // the submit Enter as SEPARATE keystrokes. A long prompt sent with a
     // trailing Enter in one send-keys call is not submitted — the Enter is
     // absorbed into the large input — so a distinct Enter after a beat is needed.
-    await execFileAsync("tmux", ["send-keys", "-t", sessionName, "-l", text]);
+    // "--" ends option parsing so a prompt starting with "-" is treated as text
+    // rather than a tmux flag (which would otherwise fail the command).
+    await execFileAsync("tmux", ["send-keys", "-t", sessionName, "-l", "--", text]);
     await new Promise((resolve) => setTimeout(resolve, CLAUDE_SEND_SETTLE_MS));
     await execFileAsync("tmux", ["send-keys", "-t", sessionName, "Enter"]);
   }
@@ -242,7 +270,7 @@ export class RealTmuxAdapter implements TmuxAdapter {
     let lastOutput = baseline;
     let stableSince = 0;
     let changed = false;
-    const deadline = Date.now() + DEFAULT_COMPLETION_TIMEOUT_MS;
+    const deadline = Date.now() + this.completionTimeoutMs;
 
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, this.pollIntervalMs));
@@ -271,29 +299,54 @@ export class RealTmuxAdapter implements TmuxAdapter {
     // of returning a partial capture as if it were a complete response (which
     // would silently feed truncated output into extraction and trigger retries).
     throw new TmuxError(
-      `Claude response did not complete within ${DEFAULT_COMPLETION_TIMEOUT_MS}ms in ${sessionName}`,
+      `Claude response did not complete within ${this.completionTimeoutMs}ms in ${sessionName}`,
     );
   }
 
-  private extractDelta(previous: string, current: string): string {
-    if (current.startsWith(previous)) {
-      return current.slice(previous.length);
+  /**
+   * Strip Claude's trailing UI chrome — blank lines, the animated spinner, and
+   * the bordered input box with its hints — from the bottom of a capture so the
+   * remaining transcript grows append-only and can be diffed for stream deltas.
+   * Best-effort: it walks up from the bottom while lines look like chrome.
+   */
+  private responseRegion(capture: string): string {
+    const lines = capture.split("\n");
+    let end = lines.length;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i] ?? "";
+      const trimmed = line.trim();
+      const isChrome =
+        trimmed === "" ||
+        CLAUDE_RUNNING_PATTERN.test(line) ||
+        this.readyPattern.test(line) ||
+        /^[╭╮╰╯│─\s]+$/u.test(trimmed) ||
+        trimmed.startsWith("❯");
+      if (isChrome) {
+        end = i;
+      } else {
+        break;
+      }
     }
-    const prevLines = previous.split("\n");
-    const currLines = current.split("\n");
-    let commonPrefix = 0;
-    while (commonPrefix < prevLines.length && commonPrefix < currLines.length && prevLines[commonPrefix] === currLines[commonPrefix]) {
-      commonPrefix++;
-    }
-    return currLines.slice(commonPrefix).join("\n");
+    return lines.slice(0, end).join("\n");
   }
 
-  private isResponseComplete(output: string, prompt: string): boolean {
-    const promptIdx = output.lastIndexOf(prompt);
-    if (promptIdx < 0) return false;
-
-    const afterPrompt = output.slice(promptIdx + prompt.length);
-    return this.readyPattern.test(afterPrompt);
+  /**
+   * Return the part of `current` not already at the tail of `previous`, never
+   * re-emitting text. Handles a plain append and the case where the capture
+   * reflowed/scrolled by realigning on the longest overlap — so a scrolled pane
+   * is not yielded wholesale (the previous line-prefix delta did exactly that).
+   */
+  private appendDelta(previous: string, current: string): string {
+    if (current.length === 0) return "";
+    if (previous.length === 0) return current;
+    if (current.startsWith(previous)) return current.slice(previous.length);
+    const max = Math.min(previous.length, current.length);
+    for (let k = max; k > 0; k--) {
+      if (previous.endsWith(current.slice(0, k))) {
+        return current.slice(k);
+      }
+    }
+    return current;
   }
 }
 /* v8 ignore stop */
