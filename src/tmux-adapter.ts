@@ -86,6 +86,15 @@ export class RealTmuxAdapter implements TmuxAdapter {
       return { exitCode: 0, output };
     }
 
+    // Result mode needs the full answer even when it scrolls past the visible
+    // pane, and must not pick up a prior task's JSON from a reused slot. Detect
+    // completion and capture against joined scrollback, then return only the
+    // slice after the current prompt echo so extraction sees just this answer.
+    if (request.mode === "result") {
+      const full = await this.waitForCompletion(sessionName, request.prompt, (s) => this.captureResult(s));
+      return { exitCode: 0, output: this.sliceFromLastPrompt(full, request.prompt) };
+    }
+
     const output = await this.waitForCompletion(sessionName, request.prompt);
     return { exitCode: 0, output };
   }
@@ -139,6 +148,20 @@ export class RealTmuxAdapter implements TmuxAdapter {
     return stdout;
   }
 
+  private async captureResult(sessionName: string): Promise<string> {
+    // -J joins wrapped lines (so a wrapped prompt echo stays matchable); -S -
+    // includes scrollback (so a multi-screen answer is captured in full).
+    const { stdout } = await execFileAsync("tmux", [
+      "capture-pane", "-p", "-J", "-S", "-", "-t", sessionName,
+    ]);
+    return stdout;
+  }
+
+  private sliceFromLastPrompt(capture: string, prompt: string): string {
+    const idx = capture.lastIndexOf(prompt);
+    return idx >= 0 ? capture.slice(idx + prompt.length) : capture;
+  }
+
   private buildClaudeCommand(options: ClaudeStartOptions): string {
     const parts = ["claude"];
     if (options.sessionId) {
@@ -179,7 +202,11 @@ export class RealTmuxAdapter implements TmuxAdapter {
     return lastOutput;
   }
 
-  private async waitForCompletion(sessionName: string, prompt: string): Promise<string> {
+  private async waitForCompletion(
+    sessionName: string,
+    prompt: string,
+    capture: (session: string) => Promise<string> = (session) => this.capturePane(session),
+  ): Promise<string> {
     let lastOutput = "";
     let stableSince = 0;
     let seenPrompt = false;
@@ -187,7 +214,7 @@ export class RealTmuxAdapter implements TmuxAdapter {
 
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, this.pollIntervalMs));
-      const output = await this.capturePane(sessionName);
+      const output = await capture(sessionName);
 
       if (!seenPrompt) {
         if (output.includes(prompt)) {
