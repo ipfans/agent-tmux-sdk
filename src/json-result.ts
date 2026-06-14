@@ -21,7 +21,7 @@ const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~
  */
 export function buildResultInstruction(shape?: string): string {
   const base =
-    "Respond with ONLY a single valid JSON value and nothing else — no markdown code fences, no commentary, no surrounding text.";
+    "Respond with ONLY a single JSON object or array and nothing else — no markdown code fences, no commentary, no surrounding text.";
   if (shape !== undefined && shape.trim().length > 0) {
     return `${base} The JSON must conform to this shape: ${collapseWhitespace(shape)}.`;
   }
@@ -38,7 +38,7 @@ export function buildRepairInstruction(error?: string): string {
     error !== undefined && error.trim().length > 0
       ? ` It failed with: ${collapseWhitespace(error)}.`
       : "";
-  return `Your previous reply was not usable as JSON.${reason} Reply with ONLY a single valid JSON value — no code fences, no explanation, no surrounding text.`;
+  return `Your previous reply was not usable as JSON.${reason} Reply with ONLY a single JSON object or array — no code fences, no explanation, no surrounding text.`;
 }
 
 const MAX_ERROR_LENGTH = 300;

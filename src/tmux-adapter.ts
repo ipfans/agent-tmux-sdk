@@ -16,6 +16,7 @@ const execFileAsync = promisify(execFile);
 
 const DEFAULT_POLL_INTERVAL_MS = 500;
 const DEFAULT_STABLE_THRESHOLD_MS = 5000;
+const DEFAULT_COMPLETION_TIMEOUT_MS = 10 * 60 * 1000;
 // Claude's spinner shows "✻ <Gerund> for <N>s" when a turn completes
 // (e.g. "✻ Crunched for 5s"); the gerund varies per turn, so match generically.
 const DEFAULT_READY_PATTERN = /✻\s+\S+\s+for\s+[\d.]+\s*s/;
@@ -27,6 +28,9 @@ const CLAUDE_RUNNING_PATTERN = /⏵⏵|context\)|for shortcuts|esc to interrupt/
 // Claude writes session state as it exits; relaunching too soon makes the new
 // process exit immediately. Settle after exit before any subsequent start.
 const CLAUDE_EXIT_SETTLE_MS = 3000;
+// Gap between sending a (literal) prompt and the submit Enter, so a long prompt
+// finishes rendering before the Enter (a combined send-keys drops the Enter).
+const CLAUDE_SEND_SETTLE_MS = 300;
 
 /* v8 ignore start */
 export class RealTmuxAdapter implements TmuxAdapter {
@@ -114,7 +118,7 @@ export class RealTmuxAdapter implements TmuxAdapter {
     let lastOutput = "";
     let stableSince = 0;
     let seenPrompt = false;
-    const deadline = Date.now() + 10 * 60 * 1000;
+    const deadline = Date.now() + DEFAULT_COMPLETION_TIMEOUT_MS;
 
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, this.pollIntervalMs));
@@ -156,7 +160,7 @@ export class RealTmuxAdapter implements TmuxAdapter {
     // trailing Enter in one send-keys call is not submitted — the Enter is
     // absorbed into the large input — so a distinct Enter after a beat is needed.
     await execFileAsync("tmux", ["send-keys", "-t", sessionName, "-l", text]);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, CLAUDE_SEND_SETTLE_MS));
     await execFileAsync("tmux", ["send-keys", "-t", sessionName, "Enter"]);
   }
 
@@ -231,7 +235,7 @@ export class RealTmuxAdapter implements TmuxAdapter {
     let lastOutput = baseline;
     let stableSince = 0;
     let changed = false;
-    const deadline = Date.now() + 10 * 60 * 1000;
+    const deadline = Date.now() + DEFAULT_COMPLETION_TIMEOUT_MS;
 
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, this.pollIntervalMs));
@@ -256,7 +260,12 @@ export class RealTmuxAdapter implements TmuxAdapter {
       }
     }
 
-    return lastOutput;
+    // Deadline hit without the pane stabilizing — surface a typed error instead
+    // of returning a partial capture as if it were a complete response (which
+    // would silently feed truncated output into extraction and trigger retries).
+    throw new TmuxError(
+      `Claude response did not complete within ${DEFAULT_COMPLETION_TIMEOUT_MS}ms in ${sessionName}`,
+    );
   }
 
   private extractDelta(previous: string, current: string): string {
