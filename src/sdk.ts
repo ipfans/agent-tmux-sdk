@@ -74,6 +74,7 @@ export class AgentTmuxSdk {
   private readonly sessionPrefix: string;
   private readonly waitForResult: boolean;
   private readonly dangerouslySkipPermissions: boolean;
+  private readonly model?: string;
   private readonly slots: TmuxSlot[] = [];
   private readonly tasks = new Map<string, TaskRecord>();
   private readonly queue: TaskRecord[] = [];
@@ -94,6 +95,7 @@ export class AgentTmuxSdk {
     this.sessionPrefix = options.sessionPrefix ?? "agent-tmux-sdk";
     this.waitForResult = options.waitForResult ?? true;
     this.dangerouslySkipPermissions = options.dangerouslySkipPermissions ?? true;
+    this.model = options.model;
   }
 
   on<K extends keyof SdkEventMap & string>(event: K, listener: (...args: SdkEventMap[K]) => void): this {
@@ -387,6 +389,15 @@ export class AgentTmuxSdk {
 
     this.dispatchPromise = this.dispatchLoop().finally(() => {
       this.dispatchPromise = undefined;
+      // A dispatch() arriving in the microtask window between dispatchLoop's
+      // final `dispatchAgain` check and this clear sees dispatchPromise still
+      // set, so it only flips dispatchAgain and returns — deferring to a loop
+      // that has already exited. Re-run so the task it just queued is not
+      // stranded (e.g. a runStream early-break fires dispatch() right before a
+      // follow-up runTask lands in this window).
+      if (this.dispatchAgain && !this.closed) {
+        this.dispatch();
+      }
     });
   }
 
@@ -525,6 +536,7 @@ export class AgentTmuxSdk {
       startupTimeoutMs: this.startupTimeoutMs,
       sessionId,
       dangerouslySkipPermissions: this.dangerouslySkipPermissions,
+      model: this.model,
     };
   }
 

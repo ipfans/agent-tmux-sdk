@@ -34,6 +34,12 @@ async function resolveGate(): Promise<{ enabled: boolean; reason: string }> {
  */
 export const integration = await resolveGate();
 
+/**
+ * Model the integration suite runs against. Defaults to `haiku` for speed and
+ * cost; override with `INTEGRATION_MODEL` (e.g. `INTEGRATION_MODEL=sonnet`).
+ */
+export const integrationModel = process.env.INTEGRATION_MODEL ?? "haiku";
+
 let counter = 0;
 
 /** A tmux session prefix unique to one test, so concurrent suites never collide. */

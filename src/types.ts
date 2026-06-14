@@ -9,6 +9,8 @@ export interface ClaudeAgentOptions {
   readonly workingDirectory?: string;
   readonly timeoutMs?: number;
   readonly dangerouslySkipPermissions?: boolean;
+  /** Claude model passed to the CLI as `--model <model>` (alias or full name). */
+  readonly model?: string;
 }
 
 export interface AgentTmuxSdkOptions {
@@ -20,6 +22,12 @@ export interface AgentTmuxSdkOptions {
   readonly sessionPrefix?: string;
   readonly waitForResult?: boolean;
   readonly dangerouslySkipPermissions?: boolean;
+  /**
+   * Claude model for every session in the pool — passed to the CLI as
+   * `--model <model>`. Accepts an alias (`haiku`, `sonnet`, `opus`, `fable`) or a
+   * full model name. Omit to use the CLI's configured default.
+   */
+  readonly model?: string;
   readonly tmux?: TmuxAdapter;
 }
 
@@ -114,6 +122,7 @@ export interface ClaudeStartOptions {
   readonly startupTimeoutMs?: number;
   readonly sessionId?: ClaudeSessionId;
   readonly dangerouslySkipPermissions?: boolean;
+  readonly model?: string;
 }
 
 export interface ClaudeExecutionRequest {

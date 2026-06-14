@@ -187,4 +187,27 @@ describe("streaming", () => {
     const result = await queued!;
     expect(result.output).toBe("queued-result");
   });
+
+  it("dispatches a task submitted immediately after an early break", async () => {
+    const tmux = new FakeTmux();
+    tmux.claude.enqueue({ type: "stream", chunks: ["a", "b", "c"] });
+    tmux.claude.enqueue({ type: "success", output: "recovered" });
+    const sdk = new AgentTmuxSdk({ tmux, poolSize: 1 });
+
+    const seen: string[] = [];
+    for await (const chunk of sdk.runStream("stream")) {
+      seen.push(chunk);
+      break;
+    }
+
+    // Submitting right after the break lands in the microtask window where the
+    // stream's fire-and-forget dispatch() is clearing dispatchPromise. The task
+    // must still be dispatched, not stranded in the queue (regression: a race in
+    // dispatch() let the loop exit while this submission only flipped a flag).
+    const result = await sdk.runOneShot("recover", { taskId: "r1" });
+    expect(result.output).toBe("recovered");
+    expect(seen).toEqual(["a"]);
+
+    await sdk.cleanup();
+  });
 });

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { AgentTmuxSdk } from "../../src/index.js";
-import { integration, uniquePrefix } from "./support.js";
+import { integration, integrationModel, uniquePrefix } from "./support.js";
 
 // Real tmux + Claude. Opt-in: `pnpm test:integration`.
 describe.skipIf(!integration.enabled)("integration: controlled concurrency", () => {
   it("caps simultaneous execution at poolSize under a 10-task burst", async () => {
-    const sdk = new AgentTmuxSdk({ poolSize: 3, sessionPrefix: uniquePrefix("pool") });
+    const sdk = new AgentTmuxSdk({ model: integrationModel, poolSize: 3, sessionPrefix: uniquePrefix("pool") });
 
     let running = 0;
     let peak = 0;

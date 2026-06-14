@@ -22,6 +22,11 @@ const DEFAULT_COMPLETION_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_READY_PATTERN = /✻\s+\S+\s+for\s+[\d.]+\s*s/;
 const SESSION_ID_PATTERN = /Resume this session with:\s*claude\s+--resume\s+(\S+)/;
 const SESSION_ID_FORMAT = /^[a-zA-Z0-9_-]+$/;
+// Model alias (e.g. "haiku"), full name (e.g. "claude-haiku-4-5-20251001"), or a
+// name with a bracketed suffix (e.g. "claude-opus-4-8[1m]"). Allows letters,
+// digits, and . _ - [ ] only — no whitespace or shell/key-special characters —
+// since the result is typed into the launch command.
+const MODEL_FORMAT = /^[a-zA-Z0-9][a-zA-Z0-9._[\]-]*$/;
 // Claude's running UI chrome. Used to detect readiness and exit instead of the
 // prompt char ❯, which collides with common shell prompts (zsh/starship/p10k).
 const CLAUDE_RUNNING_PATTERN = /⏵⏵|context\)|for shortcuts|esc to interrupt/;
@@ -219,6 +224,12 @@ export class RealTmuxAdapter implements TmuxAdapter {
         throw new TmuxError(`Invalid Claude session ID format: ${options.sessionId}`);
       }
       parts.push("--resume", options.sessionId);
+    }
+    if (options.model) {
+      if (!MODEL_FORMAT.test(options.model)) {
+        throw new TmuxError(`Invalid Claude model format: ${options.model}`);
+      }
+      parts.push("--model", options.model);
     }
     if (options.dangerouslySkipPermissions === true) {
       parts.push("--dangerously-skip-permissions");

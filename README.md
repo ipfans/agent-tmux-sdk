@@ -73,6 +73,7 @@ All numeric values are configurable through `AgentTmuxSdkOptions`.
 | `resumeAttempts` | `1` | Token-exhaustion resume attempts. `0` disables |
 | `sessionPrefix` | `"agent-tmux-sdk"` | Prefix for tmux session names |
 | `waitForResult` | `true` | Wait for Claude output to stabilize before returning. Per-task overridable |
+| `model` | _CLI default_ | Claude model for the whole pool, passed to the CLI as `--model`. Accepts an alias (`haiku`, `sonnet`, `opus`, `fable`) or a full name |
 | `tmux` | `RealTmuxAdapter` | Adapter for fake/real tmux implementations |
 
 ## API
@@ -110,7 +111,7 @@ Task operations:
 ### `ClaudeAgent`
 
 Beginner-friendly wrapper for a single pooled Claude session. Configured with
-`ClaudeAgentOptions` (`workingDirectory`, `timeoutMs`, `dangerouslySkipPermissions`).
+`ClaudeAgentOptions` (`workingDirectory`, `timeoutMs`, `dangerouslySkipPermissions`, `model`).
 
 ```typescript
 import { ClaudeAgent } from "agent-tmux-sdk";
@@ -146,7 +147,7 @@ pnpm test:watch        # Watch mode
 pnpm test:integration  # Real tmux + Claude end-to-end (opt-in)
 ```
 
-`pnpm test` never invokes Claude. The real tmux/Claude end-to-end suite is opt-in: `pnpm test:integration` sets `RUN_INTEGRATION=1`, and is skip-safe — it skips cleanly unless both `tmux` and the Claude CLI are available locally.
+`pnpm test` never invokes Claude. The real tmux/Claude end-to-end suite is opt-in: `pnpm test:integration` sets `RUN_INTEGRATION=1`, and is skip-safe — it skips cleanly unless both `tmux` and the Claude CLI are available locally. The integration suite runs against the `haiku` model for speed and cost; override with `INTEGRATION_MODEL` (e.g. `INTEGRATION_MODEL=sonnet pnpm test:integration`).
 
 ## Development
 

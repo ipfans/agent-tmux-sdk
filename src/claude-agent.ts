@@ -13,6 +13,7 @@ export class ClaudeAgent {
     this.sdk = new AgentTmuxSdk({
       poolSize: 1,
       dangerouslySkipPermissions: options.dangerouslySkipPermissions ?? true,
+      model: options.model,
     });
   }
 
