@@ -41,7 +41,10 @@ export class RealTmuxAdapter implements TmuxAdapter {
   }
 
   async createSession(sessionName: string, workingDirectory?: string): Promise<TmuxProcessHandle> {
-    const args = ["new-session", "-d", "-s", sessionName];
+    // Wide pane: a detached session defaults to 80 cols, which wraps large
+    // compact JSON mid-token and can corrupt it on capture. A wide pane keeps
+    // long lines intact so extraction stays reliable.
+    const args = ["new-session", "-d", "-s", sessionName, "-x", "400", "-y", "50"];
     if (workingDirectory !== undefined) {
       args.push("-c", workingDirectory);
     }
