@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildRepairInstruction, buildResultInstruction, extractJson } from "../src/json-result.js";
+import {
+  buildRepairInstruction,
+  buildResultInstruction,
+  extractJson,
+  formatSchemaError,
+} from "../src/json-result.js";
 
 const ESC = String.fromCharCode(27);
 
@@ -88,5 +93,30 @@ describe("buildRepairInstruction", () => {
 
   it("is single-line without an error", () => {
     expect(buildRepairInstruction()).not.toContain("\n");
+  });
+});
+
+describe("formatSchemaError", () => {
+  it("renders issues with path and message on a single line", () => {
+    const error = { issues: [{ path: ["sum"], message: "Expected number, received string" }] };
+    const formatted = formatSchemaError(error);
+    expect(formatted).toBe("sum: Expected number, received string");
+    expect(formatted).not.toContain("\n");
+  });
+
+  it("joins multiple issues", () => {
+    const error = {
+      issues: [
+        { path: ["a"], message: "required" },
+        { path: ["b", "c"], message: "too small" },
+      ],
+    };
+    expect(formatSchemaError(error)).toBe("a: required; b.c: too small");
+  });
+
+  it("falls back to message, then string, then a default", () => {
+    expect(formatSchemaError({ message: "bad" })).toBe("bad");
+    expect(formatSchemaError("plain error")).toBe("plain error");
+    expect(formatSchemaError(undefined)).toBe("schema validation failed");
   });
 });

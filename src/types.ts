@@ -23,7 +23,20 @@ export interface AgentTmuxSdkOptions {
   readonly tmux?: TmuxAdapter;
 }
 
-export interface RunTaskOptions {
+/**
+ * Minimal structural validator interface for result-mode schemas. A Zod schema
+ * satisfies this shape, so callers can pass `z.object({...})` and have the
+ * result type inferred — but the SDK references no `zod` type, keeping the
+ * published declarations zero-dependency (any validator exposing a compatible
+ * `safeParse` works).
+ */
+export interface SchemaLike<TOutput> {
+  safeParse(
+    input: unknown,
+  ): { success: true; data: TOutput } | { success: false; error: unknown };
+}
+
+export interface RunTaskOptions<TResult = unknown> {
   readonly taskId?: string;
   readonly prompt: string;
   readonly mode?: TaskMode;
@@ -31,6 +44,13 @@ export interface RunTaskOptions {
   readonly timeoutMs?: number;
   readonly waitForResult?: boolean;
   readonly metadata?: Record<string, unknown>;
+  /**
+   * Optional validator for `mode: "result"`. When supplied, the parsed JSON is
+   * validated against it, the return type is inferred from it, and validation
+   * errors are fed back into the repair re-prompt. Absent → the SDK only checks
+   * that the output is valid JSON and returns it untyped.
+   */
+  readonly schema?: SchemaLike<TResult>;
 }
 
 export interface RunStreamOptions {

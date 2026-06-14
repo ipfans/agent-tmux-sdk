@@ -41,6 +41,50 @@ export function buildRepairInstruction(error?: string): string {
   return `Your previous reply was not usable as JSON.${reason} Reply with ONLY a single valid JSON value — no code fences, no explanation, no surrounding text.`;
 }
 
+const MAX_ERROR_LENGTH = 300;
+
+/**
+ * Render a validator's error into a short single-line string for a repair
+ * re-prompt. Handles the common `{ issues: [{ path, message }] }` shape (Zod
+ * and Standard-Schema style) and falls back to `.message` / string form, so a
+ * validator version change cannot break repair formatting or throw.
+ */
+export function formatSchemaError(error: unknown): string {
+  if (error !== null && typeof error === "object") {
+    const issues = (error as { issues?: unknown }).issues;
+    if (Array.isArray(issues)) {
+      const parts = issues
+        .map((issue) => {
+          if (issue !== null && typeof issue === "object") {
+            const rawPath = (issue as { path?: unknown }).path;
+            const path = Array.isArray(rawPath) ? rawPath.join(".") : "";
+            const rawMessage = (issue as { message?: unknown }).message;
+            const message = typeof rawMessage === "string" ? rawMessage : "invalid";
+            return path.length > 0 ? `${path}: ${message}` : message;
+          }
+          return String(issue);
+        })
+        .filter((part) => part.length > 0);
+      if (parts.length > 0) {
+        return truncate(parts.join("; "));
+      }
+    }
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.length > 0) {
+      return truncate(message);
+    }
+  }
+  if (typeof error === "string" && error.length > 0) {
+    return truncate(error);
+  }
+  return "schema validation failed";
+}
+
+function truncate(input: string): string {
+  const collapsed = collapseWhitespace(input);
+  return collapsed.length > MAX_ERROR_LENGTH ? `${collapsed.slice(0, MAX_ERROR_LENGTH - 1)}…` : collapsed;
+}
+
 /**
  * Extract a JSON value from noisy terminal output. Strips ANSI noise, then
  * scans for balanced object/array regions (respecting quoted strings, so braces

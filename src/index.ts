@@ -12,6 +12,7 @@ export {
   type RunOneShotOptions,
   type RunStreamOptions,
   type RunTaskOptions,
+  type SchemaLike,
   type SdkEventMap,
   type TaskMode,
   type TaskResult,

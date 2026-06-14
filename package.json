@@ -27,6 +27,7 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
     "lint": "eslint src/ test/",
     "test": "vitest run",
+    "test:integration": "RUN_INTEGRATION=1 vitest run --config vitest.integration.config.ts",
     "coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "prepublishOnly": "pnpm run build"
@@ -51,7 +52,16 @@
     "tsup": "^8.5.0",
     "typescript": "^5.8.0",
     "typescript-eslint": "^8.60.1",
-    "vitest": "^3.2.0"
+    "vitest": "^3.2.0",
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "zod": "^3.23.0 || ^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "zod": {
+      "optional": true
+    }
   },
   "packageManager": "pnpm@11.5.1"
 }

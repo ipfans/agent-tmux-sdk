@@ -1,4 +1,5 @@
 import { AgentTaskError, ResultParseError, TaskTimeoutError, TmuxError } from "./errors.js";
+import { buildRepairInstruction, buildResultInstruction, extractJson, formatSchemaError } from "./json-result.js";
 import { TypedEmitter } from "./events.js";
 import { RealTmuxAdapter } from "./tmux-adapter.js";
 import type {
@@ -11,6 +12,7 @@ import type {
   RunOneShotOptions,
   RunStreamOptions,
   RunTaskOptions,
+  SchemaLike,
   SdkEventMap,
   TaskMode,
   TaskResult,
@@ -19,6 +21,12 @@ import type {
   TmuxAdapter,
 } from "./types.js";
 import { DEFAULT_IDLE_RESTART_MS } from "./types.js";
+
+// Repair re-prompts after the initial result-mode attempt (origin decision: fixed, not user-configurable).
+const DEFAULT_JSON_REPAIR_ATTEMPTS = 3;
+// Hard ceiling on total tmux executions per result task, so the repair loop and
+// token-exhaustion resume cannot compound without bound (independent of resumeAttempts).
+const MAX_RESULT_EXECUTIONS = 8;
 
 interface TmuxSlot {
   id: string;
@@ -40,6 +48,7 @@ interface TaskRecord<TResult = unknown> {
   timeoutMs?: number;
   waitForResult?: boolean;
   metadata?: Record<string, unknown>;
+  schema?: SchemaLike<unknown>;
   state: TaskState;
   output?: string;
   error?: string;
@@ -164,7 +173,7 @@ export class AgentTmuxSdk {
     }
   }
 
-  runTask<TResult = unknown>(options: RunTaskOptions): Promise<TaskResult<TResult>> {
+  runTask<TResult = unknown>(options: RunTaskOptions<TResult>): Promise<TaskResult<TResult>> {
     if (this.closed) {
       return Promise.reject(new AgentTaskError("SDK has been cleaned up"));
     }
@@ -183,6 +192,7 @@ export class AgentTmuxSdk {
         timeoutMs: options.timeoutMs,
         waitForResult: options.waitForResult,
         metadata: options.metadata,
+        schema: options.schema,
         state: "queued",
         resolve,
         reject,
@@ -411,22 +421,21 @@ export class AgentTmuxSdk {
         slot.claudeRunning = true;
       }
 
-      const result = await this.withTaskTimeout(task, () => this.executeWithResume(slot, task));
-      task.output = result.output;
+      const outcome = await this.withTaskTimeout(task, () => this.runExecution(slot, task));
+      task.output = outcome.output;
 
-      const parsed = this.parseResultIfNeeded(task, result);
       task.state = "succeeded";
       const completedAt = Date.now();
       const taskResult: TaskResult = {
         taskId: task.taskId,
         state: "succeeded",
-        output: result.output,
-        result: parsed,
+        output: outcome.output,
+        result: outcome.result,
         processId: slot.id,
         mode: task.mode,
         startedAt,
         completedAt,
-        resumed: Boolean(result.resumed),
+        resumed: outcome.resumed,
         metadata: task.metadata,
       };
       this.emitter.emit("taskCompleted", taskResult);
@@ -453,15 +462,95 @@ export class AgentTmuxSdk {
     }
   }
 
+  private async runExecution(
+    slot: TmuxSlot,
+    task: TaskRecord,
+  ): Promise<{ output: string; result: unknown; resumed: boolean }> {
+    if (task.mode !== "result") {
+      const exec = await this.executeWithResume(slot, task, task.prompt);
+      return { output: exec.output, result: undefined, resumed: exec.resumed };
+    }
+    return this.runResultWithRepair(slot, task);
+  }
+
+  private async runResultWithRepair(
+    slot: TmuxSlot,
+    task: TaskRecord,
+  ): Promise<{ output: string; result: unknown; resumed: boolean }> {
+    // Single-line augmented prompt: tmux send-keys submits on every newline.
+    let prompt = `${task.prompt} ${buildResultInstruction()}`;
+    let attempt = 0;
+    let executions = 0;
+    let resumed = false;
+    let lastError: string | undefined;
+
+    for (;;) {
+      const exec = await this.executeWithResume(slot, task, prompt);
+      executions += exec.executions;
+      resumed = resumed || exec.resumed;
+
+      const interpreted = this.interpretResult(task, exec);
+      if (interpreted.ok) {
+        return { output: exec.output, result: interpreted.value, resumed };
+      }
+
+      lastError = interpreted.errorText;
+      attempt += 1;
+      if (attempt > DEFAULT_JSON_REPAIR_ATTEMPTS || executions >= MAX_RESULT_EXECUTIONS) {
+        throw new ResultParseError(
+          `Claude did not return valid JSON for result mode after ${attempt} attempt(s)` +
+            (lastError !== undefined ? `: ${lastError}` : ""),
+        );
+      }
+      prompt = buildRepairInstruction(lastError);
+    }
+  }
+
+  private interpretResult(
+    task: TaskRecord,
+    exec: ClaudeExecutionResult,
+  ): { ok: true; value: unknown } | { ok: false; errorText: string } {
+    let value: unknown;
+    if (exec.result !== undefined) {
+      value = exec.result;
+    } else {
+      const extracted = extractJson(exec.output);
+      if (extracted === undefined) {
+        return { ok: false, errorText: "no JSON value found in the response" };
+      }
+      try {
+        value = JSON.parse(extracted) as unknown;
+      } catch {
+        return { ok: false, errorText: "response was not valid JSON" };
+      }
+    }
+
+    const schema = task.schema;
+    if (schema !== undefined) {
+      if (typeof schema.safeParse !== "function") {
+        throw new AgentTaskError("result schema must provide a safeParse(input) method");
+      }
+      const validation = schema.safeParse(value);
+      if (!validation.success) {
+        return { ok: false, errorText: formatSchemaError(validation.error) };
+      }
+      return { ok: true, value: validation.data };
+    }
+
+    return { ok: true, value };
+  }
+
   private async executeWithResume(
     slot: TmuxSlot,
     task: TaskRecord,
-  ): Promise<ClaudeExecutionResult & { resumed?: boolean }> {
-    let result = await this.tmux.execute(slot.sessionName, this.toRequest(task));
+    prompt: string,
+  ): Promise<ClaudeExecutionResult & { resumed: boolean; executions: number }> {
+    let result = await this.tmux.execute(slot.sessionName, this.toRequest(task, prompt));
     if (result.sessionId) {
       slot.claudeSessionId = result.sessionId;
     }
     let attempts = 0;
+    let executions = 1;
 
     while (result.tokenExhausted === true && attempts < this.resumeAttempts) {
       attempts += 1;
@@ -477,7 +566,8 @@ export class AgentTmuxSdk {
       await this.tmux.startClaude(slot.sessionName, this.claudeStartOpts(slot.claudeSessionId));
       slot.claudeRunning = true;
 
-      result = await this.tmux.execute(slot.sessionName, this.toRequest(task, true));
+      result = await this.tmux.execute(slot.sessionName, this.toRequest(task, "continue"));
+      executions += 1;
       if (result.sessionId) {
         slot.claudeSessionId = result.sessionId;
       }
@@ -490,13 +580,14 @@ export class AgentTmuxSdk {
     return {
       ...result,
       resumed: attempts > 0,
+      executions,
     };
   }
 
-  private toRequest(task: TaskRecord, resuming = false): ClaudeExecutionRequest {
+  private toRequest(task: TaskRecord, prompt: string): ClaudeExecutionRequest {
     return {
       taskId: task.taskId,
-      prompt: resuming ? "continue" : task.prompt,
+      prompt,
       mode: task.mode,
       workingDirectory: task.workingDirectory,
       waitForResult: task.waitForResult ?? this.waitForResult,
@@ -524,22 +615,6 @@ export class AgentTmuxSdk {
       if (timeout !== undefined) {
         clearTimeout(timeout);
       }
-    }
-  }
-
-  private parseResultIfNeeded(task: TaskRecord, result: ClaudeExecutionResult): unknown {
-    if (task.mode !== "result") {
-      return undefined;
-    }
-
-    if (result.result !== undefined) {
-      return result.result;
-    }
-
-    try {
-      return JSON.parse(result.output) as unknown;
-    } catch (error) {
-      throw new ResultParseError("Claude output was not valid JSON for result mode", { cause: error });
     }
   }
 

@@ -9,11 +9,14 @@ import {
   type ProcessSnapshot,
   type ProcessState,
   type RunStreamOptions,
+  type RunTaskOptions,
+  type SchemaLike,
   type SdkEventMap,
   type TaskMode,
   type TaskResult,
   type TaskState,
 } from "../src/index.js";
+import { z } from "zod";
 import { FakeTmux } from "./fakes/fake-tmux.js";
 
 describe("public API types", () => {
@@ -37,6 +40,16 @@ describe("public API types", () => {
     expectTypeOf(sdk.runOneShot).parameter(0).toEqualTypeOf<string>();
     expectTypeOf(sdk.runTask<{ ok: true }>).returns.toEqualTypeOf<Promise<TaskResult<{ ok: true }>>>();
     expectTypeOf(sdk.on).parameter(0).toMatchTypeOf<string>();
+  });
+
+  it("infers the result type from a schema and exposes SchemaLike", () => {
+    expectTypeOf<RunTaskOptions>().toHaveProperty("schema");
+    expectTypeOf<SchemaLike<{ a: number }>>().toHaveProperty("safeParse");
+
+    const sdk = new AgentTmuxSdk({ tmux: new FakeTmux() });
+    const schema = z.object({ sum: z.number() });
+    const promise = sdk.runTask({ prompt: "x", mode: "result", schema });
+    expectTypeOf(promise).toEqualTypeOf<Promise<TaskResult<{ sum: number }>>>();
   });
 
   it("exports ClaudeAgent with beginner-friendly API", () => {
