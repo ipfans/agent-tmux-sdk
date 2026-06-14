@@ -15,11 +15,15 @@
 | ERR-01 | 已完成 | `test/error-paths.test.ts` | 类型化错误路径不存在。 | 启动、任务失败、超时、解析、清理、重复任务 ID、清理后拒绝、重启失败、Claude 退出失败均抛出类型化错误。 | `pnpm test` |
 | WAIT-01 | 已完成 | `test/wait-for-result.test.ts` | 等待结果的管道不存在。 | 全局默认 `true`、单任务覆盖、通过 `runOneShot`/`runTask`/恢复传递、`RealTmuxAdapter` 轮询 `capture-pane` 直到输出稳定、`readyPattern` 检测。 | `pnpm test` |
 | AGENT-01 | 已完成 | `test/claude-agent.test.ts` | ClaudeAgent 便捷封装不存在。 | `ClaudeAgent` 封装 `AgentTmuxSdk` 用于简单即发即忘场景。 | `pnpm test` |
-| INT-01 | 已完成 | `test/integration/real-tmux.skip-safe.test.ts` | 可跳过的真实集成检查不存在。 | 本地命令可用性检查，tmux/Claude 不可用时安全跳过。 | `pnpm test` |
+| JSONX-01 | 已完成 | `test/json-result.test.ts` | 纯 JSON 提取/指令辅助函数不存在。 | `extractJson` 剥离 ANSI/TUI 噪声并返回最后一个平衡值（处理围栏块、尾部噪声、字符串内括号、陈旧 scrollback + 回显的形状示例）；单行 `buildResultInstruction`/`buildRepairInstruction`；防御式 `formatSchemaError`。 | `pnpm test` |
+| REPAIR-01 | 已完成 | `test/json-repair.test.ts` | 结果模式重试循环不存在。 | 提取接入结果路径；解析失败时重提（默认 3 次），与 token 恢复相互独立；首次成功仅一次执行；耗尽后抛出 `ResultParseError`；与 token 恢复叠加时总执行次数受上限约束；oneshot 输出不受影响。 | `pnpm test` |
+| SCHEMA-01 | 已完成 | `test/json-schema.test.ts`、`test/public-api-types.test.ts` | 可选 schema 校验/类型推导不存在。 | 结构化 `SchemaLike`（兼容 Zod）校验解析后的 JSON 并通过推导给出返回类型；校验失败折入重提；接受非 Zod 的 `safeParse`；缺少 `safeParse` 抛类型化错误；不传 schema 返回无类型 JSON；发布的类型中不含 zod。 | `pnpm test`、`pnpm run typecheck` |
+| INT-01 | 已完成 | `test/integration/*.integration.test.ts` | 真实 tmux/Claude 端到端覆盖不存在（仅有可用性桩）。 | 按需启用套件（`pnpm test:integration` / `RUN_INTEGRATION`，安全可跳过）：one-shot + 纯文本、受控并发（预热后峰值 == poolSize）、带 schema 的 JSON 结果（含跨屏与复用 slot）。默认快速套件中排除。 | `pnpm test:integration`（真实）、`pnpm test`（排除）、`pnpm run typecheck` |
 
 ## 最终命令验证
 
-- `pnpm test`：14 个文件，50 个测试全部通过。
+- `pnpm test`：18 个文件，122 个测试全部通过（快速、纯 fake；不含集成测试）。
+- `pnpm test:integration`：3 个真实 tmux/Claude 套件，按需启用且安全可跳过。
 - `pnpm run typecheck`：生产和测试 TypeScript 均通过。
 - `pnpm run lint`：`src/` 和 `test/` 均通过。
-- `pnpm run build`：ESM、CJS 和声明文件输出均通过。
+- `pnpm run build`：ESM、CJS 和声明文件输出均通过（`dist` 中无 `zod`）。

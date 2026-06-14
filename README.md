@@ -13,7 +13,7 @@ TypeScript SDK for orchestrating tmux sessions with Claude CLI to build multi-ag
 - **Account switching** — switches Claude accounts on idle processes without interrupting running tasks
 - **Token-exhaustion recovery** — captures Claude session ID on exhaustion, resumes with `claude --resume <id>`, sends "continue" prompt
 - **Two-phase cleanup** — gracefully exits Claude consumers first, then destroys tmux containers
-- **Dual execution modes** — one-shot (fire-and-forget) and result (parsed JSON output)
+- **Dual execution modes** — one-shot (fire-and-forget), and result mode where the SDK coaxes JSON-only output, extracts it from terminal noise, retries on failure, and optionally validates/types it against a Zod schema
 - **Typed errors** — domain-specific error hierarchy for tmux, task, timeout, and parse failures
 - **Testable** — adapter boundary allows deterministic fake tmux/Claude harnesses in tests
 
@@ -33,6 +33,7 @@ pnpm add agent-tmux-sdk
 
 ```typescript
 import { AgentTmuxSdk } from "agent-tmux-sdk";
+import { z } from "zod"; // optional peer dependency — only needed for result-mode schemas
 
 const sdk = new AgentTmuxSdk({
   poolSize: 2,
@@ -44,16 +45,20 @@ const sdk = new AgentTmuxSdk({
 const oneshot = await sdk.runOneShot("List all files in this directory");
 console.log(oneshot.output);
 
-// Result mode — parsed JSON output
-const result = await sdk.runTask<{ summary: string }>({
-  prompt: "Summarize this repository as JSON",
+// Result mode — the SDK gets valid JSON back for you (coax → extract → retry).
+// An optional Zod schema validates the shape and types the result.
+const review = await sdk.runTask({
+  prompt: "Summarize this repository",
   mode: "result",
+  schema: z.object({ summary: z.string() }),
 });
-console.log(result.result?.summary);
+console.log(review.result?.summary); // typed as string
 
 // Clean up (two-phase: exit Claude consumers, then kill tmux containers)
 await sdk.cleanup();
 ```
+
+> Result-mode schema validation uses [Zod](https://zod.dev) as an **optional peer dependency** — install it only if you pass a `schema`. Without one, result mode still returns parsed JSON and the SDK keeps zero production dependencies. Any validator exposing a compatible `safeParse` works.
 
 ## Configuration
 
@@ -127,12 +132,13 @@ AgentTmuxSdkError (base)
 The SDK uses a `TmuxAdapter` interface boundary. Tests inject `FakeTmux` and `FakeClaude` harnesses for deterministic, fast unit tests without requiring tmux or Claude CLI.
 
 ```bash
-pnpm test             # Run tests
-pnpm run coverage     # Run with coverage
-pnpm test:watch       # Watch mode
+pnpm test              # Fast, fake-only unit tests
+pnpm run coverage      # Unit tests with coverage
+pnpm test:watch        # Watch mode
+pnpm test:integration  # Real tmux + Claude end-to-end (opt-in)
 ```
 
-Integration tests with real tmux/Claude are skip-safe — they run only when both commands are available locally.
+`pnpm test` never invokes Claude. The real tmux/Claude end-to-end suite is opt-in: `pnpm test:integration` sets `RUN_INTEGRATION=1`, and is skip-safe — it skips cleanly unless both `tmux` and the Claude CLI are available locally.
 
 ## Development
 
@@ -145,7 +151,7 @@ pnpm run lint         # eslint src/ test/
 
 ## Architecture
 
-See [docs/api-design.md](docs/api-design.md) for the full API design and [docs/scenario-matrix.md](docs/scenario-matrix.md) for the test contract surface (14 files, 50 tests).
+See [docs/api-design.md](docs/api-design.md) for the full API design and [docs/scenario-matrix.md](docs/scenario-matrix.md) for the test contract surface.
 
 ## License
 

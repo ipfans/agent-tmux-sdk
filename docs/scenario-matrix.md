@@ -15,13 +15,17 @@
 | ERR-01 | Complete | `test/error-paths.test.ts` | Typed error paths did not exist. | Startup, task failure, timeout, parse, cleanup, duplicate task ID, post-cleanup rejection, restart failures, and Claude exit failures all raise typed errors. | `pnpm test` |
 | WAIT-01 | Complete | `test/wait-for-result.test.ts` | Wait-for-result plumbing did not exist. | Global default `true`, per-task override, propagation through `runOneShot`/`runTask`/resume, `RealTmuxAdapter` polls `capture-pane` until output stabilizes, `readyPattern` detection. | `pnpm test` |
 | AGENT-01 | Complete | `test/claude-agent.test.ts` | ClaudeAgent convenience wrapper did not exist. | `ClaudeAgent` wraps `AgentTmuxSdk` for simple one-shot usage. | `pnpm test` |
-| INT-01 | Complete | `test/integration/real-tmux.skip-safe.test.ts` | Skip-safe real integration check did not exist. | Local command availability check skips safely when tmux/Claude are unavailable. | `pnpm test` |
+| JSONX-01 | Complete | `test/json-result.test.ts` | Pure JSON extraction/instruction helpers did not exist. | `extractJson` strips ANSI/TUI noise and returns the last balanced value (handles fenced blocks, trailing noise, braces-in-strings, stale scrollback + echoed shape examples); single-line `buildResultInstruction`/`buildRepairInstruction`; defensive `formatSchemaError`. | `pnpm test` |
+| REPAIR-01 | Complete | `test/json-repair.test.ts` | Result-mode repair retry did not exist. | Extraction wired into the result path; re-prompts on parse failure (default 3) distinct from token resume; happy-path single execution; exhaustion raises `ResultParseError`; total executions bounded by a ceiling under compounding token resume; oneshot output untouched. | `pnpm test` |
+| SCHEMA-01 | Complete | `test/json-schema.test.ts`, `test/public-api-types.test.ts` | Optional schema validation/typing did not exist. | Structural `SchemaLike` (Zod-compatible) validates parsed JSON and types the result via inference; validation failure folds into the repair re-prompt; non-Zod `safeParse` accepted; missing `safeParse` raises a typed error; absent schema returns untyped JSON; no zod in published types. | `pnpm test`, `pnpm run typecheck` |
+| INT-01 | Complete | `test/integration/*.integration.test.ts` | Real tmux/Claude end-to-end coverage did not exist (only an availability stub). | Opt-in suite (`pnpm test:integration` / `RUN_INTEGRATION`, skip-safe): one-shot + plain text, controlled concurrency (pre-warmed peak == poolSize), JSON result with schema (incl. multi-screen and reused-slot). Excluded from the default fast suite. | `pnpm test:integration` (real), `pnpm test` (excluded), `pnpm run typecheck` |
 
 ## Final command evidence
 
-- `pnpm test`: 14 files, 50 tests passed.
+- `pnpm test`: 18 files, 122 tests passed (fast, fake-only; integration excluded).
+- `pnpm test:integration`: 3 real tmux/Claude suites, opt-in and skip-safe.
 - `pnpm run typecheck`: production and test TypeScript passed.
 - `pnpm run lint`: `src/` and `test/` passed.
-- `pnpm run build`: ESM, CJS, and declaration output passed.
+- `pnpm run build`: ESM, CJS, and declaration output passed (no `zod` in `dist`).
 
 > 中文版本：[scenario-matrix_zh.md](scenario-matrix_zh.md)

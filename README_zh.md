@@ -13,7 +13,7 @@
 - **账户切换** — 在空闲进程上切换 Claude 账户，不中断正在运行的任务
 - **Token 耗尽恢复** — 捕获 Claude 会话 ID，通过 `claude --resume <id>` 恢复，发送 "continue" 提示词
 - **两阶段清理** — 先优雅退出 Claude 消费者，再销毁 tmux 容器
-- **双执行模式** — 即发即忘（one-shot）和结果模式（解析 JSON 输出）
+- **双执行模式** — 即发即忘（one-shot），以及结果模式：SDK 引导只输出 JSON、从终端噪声中提取、失败自动重试，并可选地用 Zod schema 校验形状与推导类型
 - **类型化错误** — 针对 tmux、任务、超时和解析失败的领域特定错误层次结构
 - **可测试** — 适配器边界允许在测试中使用确定性的假（fake）tmux/Claude 测试工具
 
@@ -33,6 +33,7 @@ pnpm add agent-tmux-sdk
 
 ```typescript
 import { AgentTmuxSdk } from "agent-tmux-sdk";
+import { z } from "zod"; // 可选 peer 依赖 — 仅在结果模式使用 schema 时需要
 
 const sdk = new AgentTmuxSdk({
   poolSize: 2,
@@ -44,16 +45,20 @@ const sdk = new AgentTmuxSdk({
 const oneshot = await sdk.runOneShot("List all files in this directory");
 console.log(oneshot.output);
 
-// 结果模式 — 解析 JSON 输出
-const result = await sdk.runTask<{ summary: string }>({
-  prompt: "Summarize this repository as JSON",
+// 结果模式 — SDK 负责拿到合法 JSON（引导 → 提取 → 重试）。
+// 可选的 Zod schema 会校验形状并推导返回类型。
+const review = await sdk.runTask({
+  prompt: "Summarize this repository",
   mode: "result",
+  schema: z.object({ summary: z.string() }),
 });
-console.log(result.result?.summary);
+console.log(review.result?.summary); // 类型为 string
 
 // 清理（两阶段：退出 Claude 消费者，然后终止 tmux 容器）
 await sdk.cleanup();
 ```
+
+> 结果模式的 schema 校验把 [Zod](https://zod.dev) 作为**可选 peer 依赖** — 仅当你传入 `schema` 时才需要安装。不传 schema 时结果模式仍返回解析后的 JSON，且 SDK 保持零生产依赖。任何暴露兼容 `safeParse` 的校验库都可用。
 
 ## 配置项
 
@@ -127,12 +132,13 @@ AgentTmuxSdkError（基类）
 SDK 使用 `TmuxAdapter` 接口边界。测试注入 `FakeTmux` 和 `FakeClaude` 测试工具，实现确定性、快速的单元测试，无需真实的 tmux 或 Claude CLI。
 
 ```bash
-pnpm test             # 运行测试
-pnpm run coverage     # 运行测试并生成覆盖率报告
-pnpm test:watch       # 监听模式
+pnpm test              # 快速、纯 fake 单元测试
+pnpm run coverage      # 单元测试 + 覆盖率
+pnpm test:watch        # 监听模式
+pnpm test:integration  # 真实 tmux + Claude 端到端（按需启用）
 ```
 
-与真实 tmux/Claude 的集成测试是安全可跳过的——仅在本地两个命令均可用时才运行。
+`pnpm test` 绝不调用 Claude。真实 tmux/Claude 端到端测试为按需启用：`pnpm test:integration` 会设置 `RUN_INTEGRATION=1`，且安全可跳过——除非本地同时具备 `tmux` 和 Claude CLI，否则自动跳过。
 
 ## 开发
 
@@ -145,7 +151,7 @@ pnpm run lint         # eslint src/ test/
 
 ## 架构
 
-完整的 API 设计请参见 [docs/api-design_zh.md](docs/api-design_zh.md)，测试契约覆盖面（14 个文件，50 个测试）请参见 [docs/scenario-matrix_zh.md](docs/scenario-matrix_zh.md)。
+完整的 API 设计请参见 [docs/api-design_zh.md](docs/api-design_zh.md)，测试契约覆盖面请参见 [docs/scenario-matrix_zh.md](docs/scenario-matrix_zh.md)。
 
 ## 许可证
 
