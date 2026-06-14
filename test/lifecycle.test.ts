@@ -27,7 +27,7 @@ describe("lifecycle state", () => {
 
   it("captures process snapshot with lifecycle metadata", async () => {
     const tmux = new FakeTmux();
-    const sdk = new AgentTmuxSdk({ tmux, account: "test-acct" });
+    const sdk = new AgentTmuxSdk({ tmux });
 
     await sdk.runOneShot("x");
 
@@ -35,7 +35,6 @@ describe("lifecycle state", () => {
     expect(processes).toHaveLength(1);
     expect(processes[0]).toMatchObject({
       state: "idle",
-      account: "test-acct",
       claudeRunning: true,
     });
     expect(processes[0]?.startedAt).toBeGreaterThan(0);

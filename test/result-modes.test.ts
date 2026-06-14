@@ -31,4 +31,16 @@ describe("one-shot and result modes", () => {
 
     await expect(sdk.runTask({ prompt: "json", mode: "result" })).rejects.toBeInstanceOf(ResultParseError);
   });
+
+  it("extracts JSON from noisy result-mode pane output", async () => {
+    const tmux = new FakeTmux();
+    tmux.claude.enqueue({
+      type: "success",
+      output: 'user> summarize\n\n{"files":3,"summary":"ok"}\n\n✻ Baked\n❯ ',
+    });
+    const sdk = new AgentTmuxSdk({ tmux });
+
+    const result = await sdk.runTask<{ files: number; summary: string }>({ prompt: "json", mode: "result" });
+    expect(result.result).toEqual({ files: 3, summary: "ok" });
+  });
 });

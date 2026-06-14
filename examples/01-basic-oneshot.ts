@@ -3,18 +3,15 @@
  *
  * 基础即发即忘执行 — 运行 prompt 的最简方式。
  */
-import { AgentTmuxSdk } from "agent-tmux-sdk";
+import { ClaudeAgent } from "agent-tmux-sdk";
 
 async function main() {
-  const sdk = new AgentTmuxSdk();
+  const agent = new ClaudeAgent();
 
-  const result = await sdk.runOneShot("List all TypeScript files in this directory");
+  const output = await agent.run("List all TypeScript files in this directory");
+  console.log(output);
 
-  console.log("Task ID:", result.taskId);
-  console.log("Output:", result.output);
-  console.log("Duration:", result.completedAt - result.startedAt, "ms");
-
-  await sdk.cleanup();
+  await agent.cleanup();
 }
 
 main().catch(console.error);

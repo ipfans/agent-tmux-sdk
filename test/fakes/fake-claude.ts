@@ -1,9 +1,13 @@
 import type { ClaudeExecutionRequest, ClaudeExecutionResult } from "../../src/index.js";
 
-export type FakeClaudeBehavior =
+export type FakeExecutionBehavior =
   | { type: "success"; output: string; result?: unknown; delayMs?: number }
-  | { type: "token-exhausted"; output?: string; resumeWith: FakeClaudeBehavior; delayMs?: number }
+  | { type: "token-exhausted"; output?: string; resumeWith: FakeExecutionBehavior; delayMs?: number }
   | { type: "failure"; message: string; output?: string; delayMs?: number };
+
+export type FakeClaudeBehavior =
+  | FakeExecutionBehavior
+  | { type: "stream"; chunks: string[]; chunkDelayMs?: number };
 
 export class FakeClaude {
   readonly executions: ClaudeExecutionRequest[] = [];
@@ -18,9 +22,12 @@ export class FakeClaude {
   async execute(request: ClaudeExecutionRequest): Promise<ClaudeExecutionResult> {
     this.executions.push(request);
     const behavior = this.behaviors.shift() ?? {
-      type: "success",
+      type: "success" as const,
       output: `ok:${request.prompt}`,
     };
+    if (behavior.type === "stream") {
+      return { exitCode: 0, output: behavior.chunks.join("") };
+    }
     return this.resolveBehavior(behavior);
   }
 
@@ -29,8 +36,29 @@ export class FakeClaude {
     return this.execute(request);
   }
 
+  async *stream(request: ClaudeExecutionRequest): AsyncIterable<string> {
+    this.executions.push(request);
+    const behavior = this.behaviors.shift() ?? {
+      type: "stream" as const,
+      chunks: [`ok:${request.prompt}`],
+    };
+    if (behavior.type === "stream") {
+      for (const chunk of behavior.chunks) {
+        if (behavior.chunkDelayMs !== undefined) {
+          await new Promise((resolve) => setTimeout(resolve, behavior.chunkDelayMs));
+        }
+        yield chunk;
+      }
+    } else if (behavior.type === "failure") {
+      throw new Error(behavior.message);
+    } else {
+      const result = await this.resolveBehavior(behavior);
+      yield result.output;
+    }
+  }
+
   private async resolveBehavior(
-    behavior: FakeClaudeBehavior,
+    behavior: FakeExecutionBehavior,
   ): Promise<ClaudeExecutionResult> {
     if (behavior.delayMs !== undefined) {
       await new Promise((resolve) => setTimeout(resolve, behavior.delayMs));

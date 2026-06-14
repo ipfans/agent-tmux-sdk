@@ -20,8 +20,8 @@ export class FakeTmux implements TmuxAdapter {
   readonly claudeStarts: Array<{ sessionName: string; options: ClaudeStartOptions }> = [];
   readonly claudeExits: string[] = [];
   readonly claudeResumes: Array<{ sessionName: string; sessionId: string }> = [];
+  readonly claudeInterrupts: string[] = [];
   readonly executions: ClaudeExecutionRequest[] = [];
-  readonly accountSwitches: Array<{ sessionName: string; account: string }> = [];
   readonly sessions = new Set<string>();
   readonly claudeProcesses = new Map<string, FakeClaudeProcess>();
   private nextSessionId = 1;
@@ -31,7 +31,6 @@ export class FakeTmux implements TmuxAdapter {
   failStartClaude = false;
   failExitClaude = false;
   failResumeClaude = false;
-  failAccountSwitch = false;
 
   async createSession(sessionName: string): Promise<TmuxProcessHandle> {
     if (this.failCreateSession) {
@@ -93,11 +92,15 @@ export class FakeTmux implements TmuxAdapter {
     return this.claude.execute(request);
   }
 
-  async switchAccount(sessionName: string, account: string): Promise<void> {
-    if (this.failAccountSwitch) {
-      throw new Error("account switch failed");
-    }
-    this.accountSwitches.push({ sessionName, account });
+  async *stream(
+    _sessionName: string,
+    request: ClaudeExecutionRequest,
+  ): AsyncIterable<string> {
+    yield* this.claude.stream(request);
+  }
+
+  async interrupt(sessionName: string): Promise<void> {
+    this.claudeInterrupts.push(sessionName);
   }
 
   async capturePane(sessionName: string): Promise<string> {
