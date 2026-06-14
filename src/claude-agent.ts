@@ -14,6 +14,7 @@ export class ClaudeAgent {
       poolSize: 1,
       dangerouslySkipPermissions: options.dangerouslySkipPermissions ?? true,
       model: options.model,
+      env: options.env,
     });
   }
 

@@ -13,6 +13,7 @@ import type {
   ClaudeExecutionRequest,
   ClaudeExecutionResult,
   ClaudeSessionId,
+  EnvVars,
   ProcessSnapshot,
   ProcessState,
   RunOneShotOptions,
@@ -75,6 +76,7 @@ export class AgentTmuxSdk {
   private readonly waitForResult: boolean;
   private readonly dangerouslySkipPermissions: boolean;
   private readonly model?: string;
+  private readonly env?: EnvVars;
   private readonly slots: TmuxSlot[] = [];
   private readonly tasks = new Map<string, TaskRecord>();
   private readonly queue: TaskRecord[] = [];
@@ -96,6 +98,7 @@ export class AgentTmuxSdk {
     this.waitForResult = options.waitForResult ?? true;
     this.dangerouslySkipPermissions = options.dangerouslySkipPermissions ?? true;
     this.model = options.model;
+    this.env = options.env;
   }
 
   on<K extends keyof SdkEventMap & string>(event: K, listener: (...args: SdkEventMap[K]) => void): this {
@@ -537,6 +540,7 @@ export class AgentTmuxSdk {
       sessionId,
       dangerouslySkipPermissions: this.dangerouslySkipPermissions,
       model: this.model,
+      env: this.env,
     };
   }
 

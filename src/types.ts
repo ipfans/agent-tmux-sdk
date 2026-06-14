@@ -5,12 +5,25 @@ export type TaskState = "queued" | "running" | "resuming" | "succeeded" | "faile
 export type TaskMode = "oneshot" | "result";
 export type ClaudeSessionId = string;
 
+/**
+ * Environment variables applied to the `claude` process at launch and re-applied
+ * on every restart/resume. Emitted as a POSIX command prefix scoped to the
+ * process (never `export`ed), so insertion order is preserved in the command.
+ */
+export type EnvVars = Readonly<Record<string, string>>;
+
 export interface ClaudeAgentOptions {
   readonly workingDirectory?: string;
   readonly timeoutMs?: number;
   readonly dangerouslySkipPermissions?: boolean;
   /** Claude model passed to the CLI as `--model <model>` (alias or full name). */
   readonly model?: string;
+  /**
+   * Environment variables passed to the `claude` process (e.g. `ANTHROPIC_BASE_URL`
+   * / `ANTHROPIC_AUTH_TOKEN` for third-party models). Scoped to the process and
+   * re-applied on every restart; never `export`ed into the tmux shell.
+   */
+  readonly env?: EnvVars;
 }
 
 export interface AgentTmuxSdkOptions {
@@ -28,6 +41,15 @@ export interface AgentTmuxSdkOptions {
    * full model name. Omit to use the CLI's configured default.
    */
   readonly model?: string;
+  /**
+   * Environment variables passed to every `claude` process in the pool as a
+   * command prefix (e.g. `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` to drive a
+   * third-party Anthropic-compatible model). Scoped to each process and
+   * re-applied on every restart/resume; never `export`ed into the tmux shell.
+   * Use a preset helper (`deepseek`, `glm`, `mimo`, `anthropicCompatible`) or a
+   * hand-written map.
+   */
+  readonly env?: EnvVars;
   readonly tmux?: TmuxAdapter;
 }
 
@@ -123,6 +145,7 @@ export interface ClaudeStartOptions {
   readonly sessionId?: ClaudeSessionId;
   readonly dangerouslySkipPermissions?: boolean;
   readonly model?: string;
+  readonly env?: EnvVars;
 }
 
 export interface ClaudeExecutionRequest {

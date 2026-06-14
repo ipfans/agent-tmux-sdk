@@ -6,6 +6,8 @@ import {
   TmuxError,
   type AgentTmuxSdkOptions,
   type ClaudeAgentOptions,
+  type ClaudeStartOptions,
+  type EnvVars,
   type ProcessSnapshot,
   type ProcessState,
   type RunStreamOptions,
@@ -58,6 +60,13 @@ describe("public API types", () => {
     const agent = new ClaudeAgent();
     expectTypeOf(agent.run).parameter(0).toEqualTypeOf<string>();
     expectTypeOf(agent.run).returns.toEqualTypeOf<Promise<string>>();
+  });
+
+  it("exposes the env option on the option types and the EnvVars alias", () => {
+    expectTypeOf<AgentTmuxSdkOptions>().toHaveProperty("env");
+    expectTypeOf<ClaudeAgentOptions>().toHaveProperty("env");
+    expectTypeOf<ClaudeStartOptions>().toHaveProperty("env");
+    expectTypeOf<EnvVars>().toEqualTypeOf<Readonly<Record<string, string>>>();
   });
 
   it("exports error hierarchy", () => {

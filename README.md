@@ -74,7 +74,31 @@ All numeric values are configurable through `AgentTmuxSdkOptions`.
 | `sessionPrefix` | `"agent-tmux-sdk"` | Prefix for tmux session names |
 | `waitForResult` | `true` | Wait for Claude output to stabilize before returning. Per-task overridable |
 | `model` | _CLI default_ | Claude model for the whole pool, passed to the CLI as `--model`. Accepts an alias (`haiku`, `sonnet`, `opus`, `fable`) or a full name |
+| `env` | _none_ | Environment variables passed to every Claude process as a command prefix — scoped to the process, re-applied on every restart/resume, never `export`ed. Use a preset (`deepseek`/`glm`/`mimo`/`anthropicCompatible`) or a manual map |
 | `tmux` | `RealTmuxAdapter` | Adapter for fake/real tmux implementations |
+
+### Third-party models (environment variables)
+
+Point Claude at any Anthropic-compatible provider (DeepSeek, GLM/Zhipu, MiMo/Xiaomi, …) through the `env` option. The variables are applied as a POSIX command prefix on the `claude` launch (`KEY='value' … claude …`) — scoped to that process, re-applied on every restart/resume, and **never** `export`ed into the tmux shell.
+
+```typescript
+import { AgentTmuxSdk, ClaudeAgent, deepseek, glm, anthropicCompatible } from "agent-tmux-sdk";
+
+// Preset helper — returns a plain env map
+const agent = new ClaudeAgent({ env: deepseek({ apiKey: process.env.DEEPSEEK_API_KEY! }) });
+
+// Compose a preset with manual overrides (later keys win)
+const sdk = new AgentTmuxSdk({
+  env: { ...glm({ apiKey: process.env.GLM_API_KEY! }), HTTP_PROXY: "http://127.0.0.1:7890" },
+});
+
+// Any provider via the generic builder (or a hand-written map)
+new AgentTmuxSdk({
+  env: anthropicCompatible({ baseUrl: "https://api.example.com/anthropic", apiKey: "…", model: "my-model" }),
+});
+```
+
+Presets (`deepseek`, `glm`, `mimo`, `anthropicCompatible`) simply return `EnvVars` maps, so they are interchangeable with manual maps. When using a third-party model, let the preset's `ANTHROPIC_MODEL` drive selection rather than the `--model` flag. Note: the launch line (including `ANTHROPIC_AUTH_TOKEN`) is echoed into the local tmux pane's scrollback — acceptable for a local session, and still more private than a shell `export`.
 
 ## API
 
@@ -111,7 +135,7 @@ Task operations:
 ### `ClaudeAgent`
 
 Beginner-friendly wrapper for a single pooled Claude session. Configured with
-`ClaudeAgentOptions` (`workingDirectory`, `timeoutMs`, `dangerouslySkipPermissions`, `model`).
+`ClaudeAgentOptions` (`workingDirectory`, `timeoutMs`, `dangerouslySkipPermissions`, `model`, `env`).
 
 ```typescript
 import { ClaudeAgent } from "agent-tmux-sdk";
