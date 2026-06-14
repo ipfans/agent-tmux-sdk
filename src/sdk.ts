@@ -467,7 +467,7 @@ export class AgentTmuxSdk {
     task: TaskRecord,
   ): Promise<{ output: string; result: unknown; resumed: boolean }> {
     if (task.mode !== "result") {
-      const exec = await this.executeWithResume(slot, task, task.prompt);
+      const exec = await this.executeWithResume(slot, task, task.prompt, this.resumeAttempts + 1);
       return { output: exec.output, result: undefined, resumed: exec.resumed };
     }
     return this.runResultWithRepair(slot, task);
@@ -485,7 +485,18 @@ export class AgentTmuxSdk {
     let lastError: string | undefined;
 
     for (;;) {
-      const exec = await this.executeWithResume(slot, task, prompt);
+      // Hard ceiling on total tmux executions, independent of resumeAttempts:
+      // the per-call budget keeps a single execute+token-resume chain from
+      // overshooting it.
+      const budget = MAX_RESULT_EXECUTIONS - executions;
+      if (budget <= 0) {
+        throw new ResultParseError(
+          `Reached the result-mode execution ceiling (${MAX_RESULT_EXECUTIONS})` +
+            (lastError !== undefined ? `: ${lastError}` : ""),
+        );
+      }
+
+      const exec = await this.executeWithResume(slot, task, prompt, budget);
       executions += exec.executions;
       resumed = resumed || exec.resumed;
 
@@ -496,7 +507,7 @@ export class AgentTmuxSdk {
 
       lastError = interpreted.errorText;
       attempt += 1;
-      if (attempt > DEFAULT_JSON_REPAIR_ATTEMPTS || executions >= MAX_RESULT_EXECUTIONS) {
+      if (attempt > DEFAULT_JSON_REPAIR_ATTEMPTS) {
         throw new ResultParseError(
           `Claude did not return valid JSON for result mode after ${attempt} attempt(s)` +
             (lastError !== undefined ? `: ${lastError}` : ""),
@@ -544,6 +555,7 @@ export class AgentTmuxSdk {
     slot: TmuxSlot,
     task: TaskRecord,
     prompt: string,
+    maxExecutions: number,
   ): Promise<ClaudeExecutionResult & { resumed: boolean; executions: number }> {
     let result = await this.tmux.execute(slot.sessionName, this.toRequest(task, prompt));
     if (result.sessionId) {
@@ -552,7 +564,7 @@ export class AgentTmuxSdk {
     let attempts = 0;
     let executions = 1;
 
-    while (result.tokenExhausted === true && attempts < this.resumeAttempts) {
+    while (result.tokenExhausted === true && attempts < this.resumeAttempts && executions < maxExecutions) {
       attempts += 1;
       task.state = "resuming";
       this.emitter.emit("taskResuming", task.taskId, attempts);

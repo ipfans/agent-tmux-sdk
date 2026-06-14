@@ -98,12 +98,25 @@ function truncate(input: string): string {
  * Returns undefined when no parseable JSON value is present.
  */
 export function extractJson(raw: string): string | undefined {
-  const cleaned = stripAnsi(raw);
-  const candidates = balancedJsonCandidates(cleaned);
+  return extractFromText(stripAnsi(raw));
+}
+
+function extractFromText(text: string): string | undefined {
+  const candidates = balancedJsonCandidates(text);
   for (let i = candidates.length - 1; i >= 0; i--) {
     const candidate = candidates[i];
-    if (candidate !== undefined && isParseable(candidate)) {
+    if (candidate === undefined) {
+      continue;
+    }
+    if (isParseable(candidate)) {
       return candidate;
+    }
+    // A balanced region that isn't valid JSON on its own may still wrap one
+    // (e.g. JSON inside bracket-balanced prose: "[the object {\"a\":1}]"). Look
+    // inside it before giving up, preferring an outer parseable value.
+    const inner = extractFromText(candidate.slice(1, -1));
+    if (inner !== undefined) {
+      return inner;
     }
   }
   return undefined;

@@ -59,6 +59,25 @@ describe("extractJson", () => {
     expect(JSON.parse(extractJson('{"a":1} then {"b":2}')!)).toEqual({ b: 2 });
   });
 
+  it("recovers JSON embedded in bracket-balanced prose", () => {
+    expect(JSON.parse(extractJson("Here's the result: [the object {\"a\":1}]")!)).toEqual({ a: 1 });
+  });
+
+  it("does not break on escaped quotes inside string values", () => {
+    const raw = '{"k":"a\\"b","n":1}';
+    expect(JSON.parse(extractJson(raw)!)).toEqual({ k: 'a"b', n: 1 });
+  });
+
+  it("returns undefined for an unclosed/unbalanced bracket", () => {
+    expect(extractJson("{ unclosed json")).toBeUndefined();
+  });
+
+  it("returns undefined for a bare scalar (result mode targets objects and arrays)", () => {
+    expect(extractJson("42")).toBeUndefined();
+    expect(extractJson('"hello"')).toBeUndefined();
+    expect(extractJson("true")).toBeUndefined();
+  });
+
   it("returns the current answer past stale scrollback and an echoed shape example", () => {
     const capture = [
       '{"task":"previous"}', // stale prior-task JSON left in a reused slot
@@ -112,6 +131,10 @@ describe("formatSchemaError", () => {
       ],
     };
     expect(formatSchemaError(error)).toBe("a: required; b.c: too small");
+  });
+
+  it("coerces a non-object issue element to a string", () => {
+    expect(formatSchemaError({ issues: ["missing field"] })).toBe("missing field");
   });
 
   it("falls back to message, then string, then a default", () => {

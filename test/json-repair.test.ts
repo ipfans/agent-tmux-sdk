@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { AgentTmuxSdk, ResultParseError } from "../src/index.js";
+import { AgentTaskError, AgentTmuxSdk, ResultParseError } from "../src/index.js";
+import type { FakeExecutionBehavior } from "./fakes/fake-claude.js";
 import { FakeTmux } from "./fakes/fake-tmux.js";
 
 describe("result-mode JSON repair loop", () => {
@@ -49,6 +50,22 @@ describe("result-mode JSON repair loop", () => {
     const sdk = new AgentTmuxSdk({ tmux });
 
     await expect(sdk.runTask({ prompt: "json", mode: "result" })).rejects.toBeInstanceOf(ResultParseError);
+    expect(tmux.executions.length).toBeLessThanOrEqual(8);
+    await sdk.cleanup();
+  });
+
+  it("hard-bounds total executions at the ceiling even with a high resumeAttempts", async () => {
+    const tmux = new FakeTmux();
+    // A deep token-exhaustion chain: each resume yields another exhaustion, so
+    // only the execution ceiling can stop it — resumeAttempts alone would not.
+    let behavior: FakeExecutionBehavior = { type: "success", output: "still not json" };
+    for (let i = 0; i < 30; i++) {
+      behavior = { type: "token-exhausted", resumeWith: behavior };
+    }
+    tmux.claude.enqueue(behavior);
+    const sdk = new AgentTmuxSdk({ tmux, resumeAttempts: 50 });
+
+    await expect(sdk.runTask({ prompt: "json", mode: "result" })).rejects.toBeInstanceOf(AgentTaskError);
     expect(tmux.executions.length).toBeLessThanOrEqual(8);
     await sdk.cleanup();
   });

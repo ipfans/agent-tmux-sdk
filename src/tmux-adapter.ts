@@ -89,6 +89,11 @@ export class RealTmuxAdapter implements TmuxAdapter {
   }
 
   async execute(sessionName: string, request: ClaudeExecutionRequest): Promise<ClaudeExecutionResult> {
+    // Clear prior scrollback so the completion capture is scoped to this task's
+    // turn — a pooled slot otherwise accumulates earlier tasks' output, which
+    // could leak a stale JSON value into extraction.
+    await execFileAsync("tmux", ["clear-history", "-t", sessionName]);
+
     if (request.workingDirectory) {
       await this.sendPrompt(sessionName, `/cd ${request.workingDirectory}`);
     }
@@ -218,7 +223,9 @@ export class RealTmuxAdapter implements TmuxAdapter {
         return lastOutput;
       }
     }
-    return lastOutput;
+    // Claude never exited — fail rather than letting the caller relaunch and
+    // type a shell command into the still-running session.
+    throw new TmuxError(`Claude did not exit within 30000ms in ${sessionName}`);
   }
 
   private async waitForCompletion(
